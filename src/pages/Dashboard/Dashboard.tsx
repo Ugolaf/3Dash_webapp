@@ -19,6 +19,12 @@ import {
   setDisplayAnimation,
   type DisplayMeshMap,
 } from '../../babylon/DisplayMeshFactory';
+import {
+  createCoverMesh,
+  removeCoverMesh,
+  setCoverPosition,
+  type CoverMeshMap,
+} from '../../babylon/CoverMeshFactory';
 import { getConfig, updateConfig, getModelBlob } from '../../services/configApi';
 import { getEntityCache, setEntityCache } from '../../services/entityCache';
 import type { HAEntityOption } from '../../components/EntityPicker';
@@ -37,6 +43,7 @@ import { showGroundGrid, hideGroundGrid, syncGridColors, disposeGroundGrid, crea
 import { createTubeMeshes, updateTubeValue, disposeAllTubes, setTubeTheme, type TubeMap } from '../../babylon/TubeMeshFactory';
 import HUD from '../../components/HUD';
 import LightModal from '../../components/LightModal';
+import CoverModal from '../../components/CoverModal';
 import RemoteModal from '../../components/RemoteModal';
 import DisplayModal from '../../components/DisplayModal';
 import DebugPanel from '../../components/DebugPanel';
@@ -61,6 +68,7 @@ export default function Dashboard() {
   const sceneCtxRef = useRef<SceneContext | null>(null);
   const meshMapRef = useRef<MeshMap>({});
   const displayMeshMapRef = useRef<DisplayMeshMap>({});
+  const coverMeshMapRef = useRef<CoverMeshMap>({});
   const tubeMapRef = useRef<TubeMap>({});
   const haRef = useRef<HALike | null>(null);
   const configRef = useRef<AppConfig | null>(null);
@@ -86,6 +94,11 @@ export default function Dashboard() {
   const [modalState, setModalState] = useState<HAState | null>(null);
   const [modalDoubleTapEntityId, setModalDoubleTapEntityId] = useState<string | undefined>();
   const [modalDoubleTapState, setModalDoubleTapState] = useState<HAState | null>(null);
+
+  const [coverModalVisible, setCoverModalVisible] = useState(false);
+  const [coverModalEntityId, setCoverModalEntityId] = useState<string | null>(null);
+  const [coverModalLabel, setCoverModalLabel] = useState('');
+  const [coverModalState, setCoverModalState] = useState<HAState | null>(null);
 
   const [remoteModalVisible, setRemoteModalVisible] = useState(false);
   const [remoteModalEntityId, setRemoteModalEntityId] = useState<string | null>(null);
@@ -567,6 +580,17 @@ export default function Dashboard() {
     [updateLightsOnCount],
   );
 
+  // Apply HA cover state to a shutter mesh (animates the curtain)
+  const applyCoverState = useCallback((entityId: string, state: HAState) => {
+    lastStatesRef.current[entityId] = state;
+    const entry = coverMeshMapRef.current[entityId];
+    const scene = sceneCtxRef.current?.scene;
+    if (!entry || !scene) return;
+    const pos = state.attributes.current_position
+      ?? (state.state === 'closed' ? 0 : 100);
+    setCoverPosition(scene, entry, pos);
+  }, []);
+
   // ── Pending-command highlight feedback ──────────────────────────
   const PENDING_COLOR = new Color3(0, 0.8, 1);   // cyan
   const ERROR_COLOR = new Color3(1, 0.15, 0.1);  // red
@@ -619,9 +643,12 @@ export default function Dashboard() {
     if (pendingRef.current.has(entityId)) return;
 
     const entry = meshMapRef.current[entityId];
-    if (!entry) return;
+    const coverEntry = coverMeshMapRef.current[entityId];
+    if (!entry && !coverEntry) return;
 
-    const meshes = [entry.bulb, ...entry.extraBulbs].filter(Boolean) as Mesh[];
+    const meshes = entry
+      ? ([entry.bulb, ...entry.extraBulbs].filter(Boolean) as Mesh[])
+      : [coverEntry.panel, coverEntry.housing];
     for (const m of meshes) hl.addMesh(m, PENDING_COLOR);
 
     let t = 0;
@@ -655,6 +682,8 @@ export default function Dashboard() {
     let weatherIntervalRef: ReturnType<typeof setInterval> | null = null;
     const ctx = createScene(canvas, { enableGlow: true });
     sceneCtxRef.current = ctx;
+    // TEMP: verification hook (remove before commit)
+    (window as unknown as Record<string, unknown>).__sceneCtx = ctx;
 
     let pressTimer: ReturnType<typeof setTimeout> | null = null;
     let pressedEntity: string | null = null;
@@ -768,7 +797,16 @@ export default function Dashboard() {
 
         // Create invisible shadow wall meshes from config
         const wallMeshes = createShadowWalls(ctx.scene, configRef.current?.shadowWalls || []);
-        const allCasters = [...result.shadowCasters, ...wallMeshes];
+
+        // Create roller shutter meshes — curtains join the sun shadow casters
+        // so a closed shutter actually blocks sunlight entering the room
+        for (const cc of configRef.current?.covers || []) {
+          coverMeshMapRef.current[cc.entityId] = createCoverMesh(ctx.scene, cc, cc.entityId);
+        }
+        const coverCasters = Object.values(coverMeshMapRef.current)
+          .flatMap((e) => [e.panel, e.housing]);
+
+        const allCasters = [...result.shadowCasters, ...wallMeshes, ...coverCasters];
 
         shadowCastersRef.current = allCasters;
 
@@ -993,6 +1031,9 @@ export default function Dashboard() {
       Object.keys(displayMeshMapRef.current).forEach((id) =>
         removeDisplayMesh(displayMeshMapRef.current, id),
       );
+      Object.keys(coverMeshMapRef.current).forEach((id) =>
+        removeCoverMesh(ctx.scene, coverMeshMapRef.current, id),
+      );
       disposeAllTubes(tubeMapRef.current);
       if (weatherIntervalRef) clearInterval(weatherIntervalRef);
       weatherRef.current?.dispose();
@@ -1029,6 +1070,8 @@ export default function Dashboard() {
       onStateChanged: (entityId: string, state: HAState) => {
         stopPendingFeedback(entityId);
         if (meshMapRef.current[entityId]) applyLightState(entityId, state);
+        if (coverMeshMapRef.current[entityId]) applyCoverState(entityId, state);
+        if (entityId === coverModalEntityIdRef.current) setCoverModalState(state);
         if (entityId === modalEntityIdRef.current) setModalState(state);
         if (entityId === modalDoubleTapEntityIdRef.current) setModalDoubleTapState(state);
         if (entityId === remoteModalEntityIdRef.current) setRemoteModalState(state);
@@ -1079,6 +1122,7 @@ export default function Dashboard() {
         states.forEach((state) => {
           lastStatesRef.current[state.entity_id] = state;
           if (meshMapRef.current[state.entity_id]) applyLightState(state.entity_id, state);
+          if (coverMeshMapRef.current[state.entity_id]) applyCoverState(state.entity_id, state);
           if (panelEntities.has(state.entity_id)) newCardStates[state.entity_id] = state;
         });
         if (Object.keys(newCardStates).length > 0) {
@@ -1124,7 +1168,7 @@ export default function Dashboard() {
           if (!sensorIds.includes(line.sensorId)) sensorIds.push(line.sensorId);
         }
       }
-      demo.start(config.lights, sensorIds);
+      demo.start(config.lights, sensorIds, config.covers ?? []);
     } else {
       const haSettings = getSetting('connection').haSettings;
       const ha = new HAConnection(
@@ -1151,7 +1195,7 @@ export default function Dashboard() {
       haRef.current = null;
       setActiveHAConnection(null);
     };
-  }, [demoMode, simulationMode, sceneReady, applyLightState, applyRemoteMode, haSettingsVersion]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [demoMode, simulationMode, sceneReady, applyLightState, applyCoverState, applyRemoteMode, haSettingsVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Keep refs to modal entity IDs for use in callbacks
   const modalEntityIdRef = useRef<string | null>(null);
@@ -1160,10 +1204,22 @@ export default function Dashboard() {
   modalDoubleTapEntityIdRef.current = modalDoubleTapEntityId;
   const remoteModalEntityIdRef = useRef<string | null>(null);
   remoteModalEntityIdRef.current = remoteModalEntityId;
+  const coverModalEntityIdRef = useRef<string | null>(null);
+  coverModalEntityIdRef.current = coverModalEntityId;
 
   const openModal = useCallback((entityId: string) => {
     const config = configRef.current;
     if (!config) return;
+
+    const coverCfg = config.covers?.find((c) => c.entityId === entityId);
+    if (coverCfg) {
+      setCoverModalEntityId(entityId);
+      setCoverModalLabel(coverCfg.label || entityId.split('.')[1].replace(/_/g, ' '));
+      setCoverModalState(lastStatesRef.current[entityId] || null);
+      setCoverModalVisible(true);
+      return;
+    }
+
     const cfg = config.lights.find((l) => l.entityId === entityId);
     if (!cfg) return;
 
@@ -1233,6 +1289,35 @@ export default function Dashboard() {
   const handleRemoteModalClose = useCallback(() => {
     setRemoteModalVisible(false);
     setRemoteModalEntityId(null);
+  }, []);
+
+  const handleCoverModalClose = useCallback(() => {
+    setCoverModalVisible(false);
+    setCoverModalEntityId(null);
+  }, []);
+
+  const handleOpenCover = useCallback((entityId: string) => {
+    const ha = haRef.current;
+    if (!ha?.isConnected) return;
+    ha.callService('cover', 'open_cover', entityId);
+  }, []);
+
+  const handleCloseCover = useCallback((entityId: string) => {
+    const ha = haRef.current;
+    if (!ha?.isConnected) return;
+    ha.callService('cover', 'close_cover', entityId);
+  }, []);
+
+  const handleStopCover = useCallback((entityId: string) => {
+    const ha = haRef.current;
+    if (!ha?.isConnected) return;
+    ha.callService('cover', 'stop_cover', entityId);
+  }, []);
+
+  const handleSetCoverPosition = useCallback((entityId: string, position: number) => {
+    const ha = haRef.current;
+    if (!ha?.isConnected) return;
+    ha.callService('cover', 'set_cover_position', entityId, { position });
   }, []);
 
   const handleRemoteButtonPress = useCallback((entityId: string) => {
@@ -1406,8 +1491,9 @@ export default function Dashboard() {
         if (homeViewSetting) setHomeViewSetting(false);
         else if (settingsOpen) setSettingsOpen(false);
         else if (remoteModalVisible) handleRemoteModalClose();
+        else if (coverModalVisible) handleCoverModalClose();
         else handleModalClose();
-      } else if (e.key === ' ' && !settingsOpen && !modalVisible && !remoteModalVisible) {
+      } else if (e.key === ' ' && !settingsOpen && !modalVisible && !remoteModalVisible && !coverModalVisible) {
         e.preventDefault();
         if (homeViewSetting) saveHomeView();
         else resetView();
@@ -1423,7 +1509,7 @@ export default function Dashboard() {
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [handleModalClose, handleRemoteModalClose, settingsOpen, modalVisible, remoteModalVisible, resetView, navigate, homeViewSetting, saveHomeView]);
+  }, [handleModalClose, handleRemoteModalClose, handleCoverModalClose, settingsOpen, modalVisible, remoteModalVisible, coverModalVisible, resetView, navigate, homeViewSetting, saveHomeView]);
 
   // 3-finger touch to reset view (mobile)
   useEffect(() => {
@@ -1645,6 +1731,18 @@ export default function Dashboard() {
           onWhiteChannel={handleWhiteChannel}
           doubleTapEntityId={modalDoubleTapEntityId}
           doubleTapState={modalDoubleTapState}
+        />
+
+        <CoverModal
+          visible={coverModalVisible}
+          entityId={coverModalEntityId}
+          label={coverModalLabel}
+          state={coverModalState}
+          onClose={handleCoverModalClose}
+          onOpenCover={handleOpenCover}
+          onCloseCover={handleCloseCover}
+          onStopCover={handleStopCover}
+          onSetPosition={handleSetCoverPosition}
         />
 
         <RemoteModal

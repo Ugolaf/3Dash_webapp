@@ -65,6 +65,22 @@ export interface LightGroup {
   name: string;
 }
 
+// --- Roller Shutters (covers) ---
+
+export interface CoverConfig {
+  /** HA cover entity ID (e.g. cover.living_bay_left). */
+  entityId: string;
+  label: string;
+  /** Center of the window opening (world coordinates). */
+  position: LightPosition;
+  /** Outward-facing wall normal (unit vector) — the shutter is mounted on this side. */
+  normal: LightPosition;
+  /** Window opening width in world units. */
+  width: number;
+  /** Window opening height in world units. */
+  height: number;
+}
+
 // --- Shadow Walls (invisible roof / sun blockers) ---
 
 export interface ShadowWallConfig {
@@ -152,6 +168,7 @@ export interface AppConfig {
   lights: LightConfig[];
   lightGroups?: LightGroup[];
   displays?: DisplayConfig[];
+  covers?: CoverConfig[];
   shadowWalls?: ShadowWallConfig[];
   sidePanel?: SidePanelConfig;
   tubes?: TubeConfig[];
@@ -173,6 +190,7 @@ export interface FullConfig {
   lights: LightConfig[];
   lightGroups?: LightGroup[];
   displays?: DisplayConfig[];
+  covers?: CoverConfig[];
   shadowWalls?: ShadowWallConfig[];
   sidePanel?: SidePanelConfig;
   tubes?: TubeConfig[];
@@ -184,6 +202,8 @@ export interface HAStateAttributes {
   color_temp?: number;
   rgb_color?: [number, number, number];
   white_value?: number;
+  /** Cover position: 100 = fully open, 0 = fully closed. */
+  current_position?: number;
   [key: string]: unknown;
 }
 

@@ -1,0 +1,35 @@
+.cover-buttons {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  margin-bottom: 6px;
+}
+
+.cover-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 0;
+  background: rgba(148, 163, 184, 0.08);
+  border: 1px solid #334155;
+  border-radius: 10px;
+  color: #cbd5e1;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.cover-btn:hover:not(:disabled) {
+  background: rgba(96, 165, 250, 0.12);
+  border-color: #60a5fa;
+  color: #60a5fa;
+}
+
+.cover-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.modal-slider.cover-position {
+  background: linear-gradient(to right, #1e293b, #60a5fa);
+}

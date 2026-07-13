@@ -1,5 +1,5 @@
 import JSZip from 'jszip';
-import type { AppConfig, DisplayConfig, LightConfig, LightGroup, ShadowWallConfig, SidePanelConfig, TubeConfig } from '../types';
+import type { AppConfig, CoverConfig, DisplayConfig, LightConfig, LightGroup, ShadowWallConfig, SidePanelConfig, TubeConfig } from '../types';
 import { saveModel as dbSaveModel, getModel as dbGetModel, deleteModel as dbDeleteModel } from './storageApi';
 import { getSettings, setAllSettings, type AppSettings } from './settingsStore';
 import { isSimulationActive } from '../contexts/SimulationModeContext';
@@ -45,6 +45,7 @@ export function updateConfig(data: {
   lights?: LightConfig[];
   lightGroups?: LightGroup[];
   displays?: DisplayConfig[];
+  covers?: CoverConfig[];
   shadowWalls?: ShadowWallConfig[];
   location?: { latitude: number; longitude: number; northOffset?: number };
   sidePanel?: SidePanelConfig;

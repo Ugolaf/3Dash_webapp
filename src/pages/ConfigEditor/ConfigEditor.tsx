@@ -41,13 +41,22 @@ import DisplayList from '../../components/DisplayList';
 import DisplayForm, { type DisplayPreviewInfo } from '../../components/DisplayForm';
 import ShadowWallList from '../../components/ShadowWallList';
 import ShadowWallForm, { type WallPreviewInfo } from '../../components/ShadowWallForm';
+import CoverList from '../../components/CoverList';
+import CoverForm, { type CoverPreviewInfo } from '../../components/CoverForm';
+import {
+  createCoverMesh,
+  removeCoverMesh,
+  rebuildAllCoverMeshes,
+  setCoverPosition,
+  type CoverMeshMap,
+} from '../../babylon/CoverMeshFactory';
 import { arrayMove } from '@dnd-kit/sortable';
 import TubeList from '../../components/TubeList';
 import TubeForm, { type TubePreviewInfo } from '../../components/TubeForm';
 import { createTubeMeshes, removeTubeMeshes, disposeAllTubes, renderMockupLabels, type TubeMap } from '../../babylon/TubeMeshFactory';
 import GuidedTour from '../../components/GuidedTour/GuidedTour';
 import { editorTourSteps } from '../../components/GuidedTour/tourSteps';
-import type { LightConfig, LightGroup, DisplayConfig, ShadowWallConfig, TubeConfig, LightPosition, HAState } from '../../types';
+import type { LightConfig, LightGroup, DisplayConfig, ShadowWallConfig, CoverConfig, TubeConfig, LightPosition, HAState } from '../../types';
 import './ConfigEditor.css';
 
 export default function ConfigEditor() {
@@ -85,8 +94,8 @@ export default function ConfigEditor() {
   const [toastMsg, setToastMsg] = useState('');
   const [toastVisible, setToastVisible] = useState(false);
 
-  // Editor mode: lights, displays, walls, or tubes
-  const [editorMode, setEditorMode] = useState<'lights' | 'displays' | 'walls' | 'tubes'>('lights');
+  // Editor mode: lights, displays, covers, walls, or tubes
+  const [editorMode, setEditorMode] = useState<'lights' | 'displays' | 'covers' | 'walls' | 'tubes'>('lights');
 
   // Load HA entity list for autocomplete in forms (cache-first, else fetch fresh).
   useEffect(() => {
@@ -124,6 +133,23 @@ export default function ConfigEditor() {
   const displayNormalRef = useRef(displayNormal);
   displayNormalRef.current = displayNormal;
   const displayOutlineRef = useRef<LinesMesh | null>(null);
+
+  // Cover (roller shutter) state
+  const coverMeshMapRef = useRef<CoverMeshMap>({});
+  const [covers, setCovers] = useState<CoverConfig[]>([]);
+  const [coverEditIdx, setCoverEditIdx] = useState<number | null>(null);
+  const [coverPanelOpen, setCoverPanelOpen] = useState(false);
+  const [coverNormal, setCoverNormal] = useState<LightPosition>({ x: 0, y: 0, z: 1 });
+  const coversRef = useRef(covers);
+  coversRef.current = covers;
+  const coverPanelOpenRef = useRef(coverPanelOpen);
+  coverPanelOpenRef.current = coverPanelOpen;
+  const coverNormalRef = useRef(coverNormal);
+  coverNormalRef.current = coverNormal;
+  const coverPreviewIdRef = useRef<string | null>(null);
+  const coverPreviewInfoRef = useRef<CoverPreviewInfo>({ width: 0.8, height: 1.2 });
+  /** Curtain position (100 = open) used for editor previews so shutters stay visible. */
+  const EDITOR_COVER_POSITION = 65;
 
   // Shadow wall state
   const [shadowWalls, setShadowWalls] = useState<ShadowWallConfig[]>([]);
@@ -478,6 +504,8 @@ export default function ConfigEditor() {
         displaysRef.current = config.displays || [];
         setShadowWalls(config.shadowWalls || []);
         shadowWallsRef.current = config.shadowWalls || [];
+        setCovers(config.covers || []);
+        coversRef.current = config.covers || [];
         setTubes(config.tubes || []);
         tubesRef.current = config.tubes || [];
 
@@ -516,6 +544,9 @@ export default function ConfigEditor() {
           updateDisplayTexture(entry, buildMockupStates(displaysRef.current));
         }
 
+        // Build cover meshes (partially closed so the curtains are visible)
+        rebuildAllCoverMeshes(ctx.scene, coverMeshMapRef.current, config.covers || [], EDITOR_COVER_POSITION);
+
         // Build tube meshes (editor preview — no live data, show mockup values)
         for (const tc of (config.tubes || [])) {
           tubeMeshMapRef.current[tc.id] = createTubeMeshes(ctx.scene, tc, null);
@@ -547,8 +578,12 @@ export default function ConfigEditor() {
       pointerDownPos = { x: evt.clientX, y: evt.clientY };
 
       if (placingModeRef.current) {
-        // Re-pick excluding preview meshes so we hit the model surface
-        const placePick = ctx.scene.pick(evt.offsetX, evt.offsetY, (m) => !m.metadata?.previewTarget);
+        // Re-pick excluding preview meshes (and cover hitboxes, which float off the wall)
+        const placePick = ctx.scene.pick(
+          evt.offsetX,
+          evt.offsetY,
+          (m) => !m.metadata?.previewTarget && !m.name.startsWith('cover_hitbox_'),
+        );
         if (!placePick.hit || !placePick.pickedPoint) return;
         posUndoStackRef.current.push({ ...positionRef.current });
         const p = placePick.pickedPoint;
@@ -560,6 +595,29 @@ export default function ConfigEditor() {
             ? { x: parseFloat(faceNormal.x.toFixed(4)), y: parseFloat(faceNormal.y.toFixed(4)), z: parseFloat(faceNormal.z.toFixed(4)) }
             : { x: 0, y: 0, z: 1 };
           setDisplayNormal(n);
+          const newPos: LightPosition = {
+            x: parseFloat(p.x.toFixed(3)),
+            y: parseFloat(p.y.toFixed(3)),
+            z: parseFloat(p.z.toFixed(3)),
+          };
+          setPosition(newPos);
+          positionRef.current = newPos;
+        } else if (coverPanelOpenRef.current) {
+          // Cover placing mode: capture the wall normal, flattened to horizontal
+          // (shutters mount on vertical walls)
+          const faceNormal = placePick.getNormal(true, true);
+          if (faceNormal) {
+            const len = Math.hypot(faceNormal.x, faceNormal.z);
+            if (len > 0.3) {
+              const n = {
+                x: parseFloat((faceNormal.x / len).toFixed(4)),
+                y: 0,
+                z: parseFloat((faceNormal.z / len).toFixed(4)),
+              };
+              setCoverNormal(n);
+              coverNormalRef.current = n;
+            }
+          }
           const newPos: LightPosition = {
             x: parseFloat(p.x.toFixed(3)),
             y: parseFloat(p.y.toFixed(3)),
@@ -635,19 +693,24 @@ export default function ConfigEditor() {
         }
         return;
       }
-      // Skip click-to-edit when already editing a display, wall, or tube
-      if (displayPanelOpenRef.current || wallPanelOpenRef.current || tubePanelOpenRef.current) return;
+      // Skip click-to-edit when already editing a display, cover, wall, or tube
+      if (displayPanelOpenRef.current || coverPanelOpenRef.current || wallPanelOpenRef.current || tubePanelOpenRef.current) return;
 
       // Pick under pointer
       const pick = ctx.scene.pick(evt.offsetX, evt.offsetY);
       if (!pick?.hit) return;
 
-      // Click on a light bulb mesh to edit it
+      // Click on a light bulb mesh (or cover mesh) to edit it
       if (pick.pickedMesh?.metadata?.entityId) {
         const clickedId = pick.pickedMesh.metadata.entityId;
         const idx = lightsRef.current.findIndex((l) => l.entityId === clickedId);
         if (idx !== -1) {
           handleEditLightRef.current(idx);
+        } else {
+          const coverIdx = coversRef.current.findIndex((c) => c.entityId === clickedId);
+          if (coverIdx !== -1) {
+            handleEditCoverRef.current(coverIdx);
+          }
         }
       }
 
@@ -679,6 +742,9 @@ export default function ConfigEditor() {
       );
       Object.keys(displayMeshMapRef.current).forEach((id) =>
         removeDisplayMesh(displayMeshMapRef.current, id),
+      );
+      Object.keys(coverMeshMapRef.current).forEach((id) =>
+        removeCoverMesh(ctx.scene, coverMeshMapRef.current, id),
       );
       disposeAllTubes(tubeMeshMapRef.current);
       clearPreview();
@@ -751,7 +817,7 @@ export default function ConfigEditor() {
 
       // Ctrl+Z undo (must check before the modifier guard)
       if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
-        if (!panelOpenRef.current && !displayPanelOpenRef.current && !wallPanelOpenRef.current && !tubePanelOpenRef.current) return;
+        if (!panelOpenRef.current && !displayPanelOpenRef.current && !coverPanelOpenRef.current && !wallPanelOpenRef.current && !tubePanelOpenRef.current) return;
         const stack = posUndoStackRef.current;
         if (stack.length === 0) return;
         e.preventDefault();
@@ -833,6 +899,11 @@ export default function ConfigEditor() {
         if (displayPanelOpenRef.current) {
           e.preventDefault();
           handleCloseDisplayPanelRef.current();
+          return;
+        }
+        if (coverPanelOpenRef.current) {
+          e.preventDefault();
+          handleCloseCoverPanelRef.current();
           return;
         }
         if (wallPanelOpenRef.current) {
@@ -1322,6 +1393,250 @@ export default function ConfigEditor() {
     [displays, displayEditIdx, clearPreview, exitPlacingMode, showToast],
   );
 
+  // --- Cover (roller shutter) handlers ---
+
+  const handleAddCover = useCallback(() => {
+    setCoverEditIdx(null);
+    setPosition({ x: 0, y: 1.5, z: 0 });
+    setCoverNormal({ x: 0, y: 0, z: 1 });
+    posUndoStackRef.current = [];
+    setCoverPanelOpen(true);
+  }, []);
+
+  const handleEditCover = useCallback(
+    (idx: number) => {
+      const cfg = covers[idx];
+      setCoverEditIdx(idx);
+      setPosition(cfg.position);
+      setCoverNormal(cfg.normal);
+      posUndoStackRef.current = [];
+      setCoverPanelOpen(true);
+    },
+    [covers],
+  );
+
+  const handleEditCoverRef = useRef(handleEditCover);
+  handleEditCoverRef.current = handleEditCover;
+
+  const handleDeleteCover = useCallback(
+    async (idx: number) => {
+      const scene = sceneCtxRef.current?.scene;
+      if (!scene) return;
+      removeCoverMesh(scene, coverMeshMapRef.current, covers[idx].entityId);
+      const updated = covers.filter((_, i) => i !== idx);
+      setCovers(updated);
+      try {
+        await updateConfig({ covers: updated });
+        showToast('Cover deleted & synced to server');
+      } catch (e) {
+        console.error('[Config] Auto-save failed:', e);
+        showToast('Cover deleted locally (server sync failed)');
+      }
+    },
+    [covers, showToast],
+  );
+
+  const handleDuplicateCover = useCallback(
+    async (idx: number) => {
+      const scene = sceneCtxRef.current?.scene;
+      if (!scene) return;
+      const src = covers[idx];
+      // Shift the copy along the wall (perpendicular to the outward normal)
+      const tangent = { x: -src.normal.z, z: src.normal.x };
+      const copy: CoverConfig = {
+        ...src,
+        entityId: src.entityId + '_copy',
+        label: (src.label || src.entityId) + ' (copy)',
+        position: {
+          x: parseFloat((src.position.x + tangent.x * (src.width + 0.1)).toFixed(3)),
+          y: src.position.y,
+          z: parseFloat((src.position.z + tangent.z * (src.width + 0.1)).toFixed(3)),
+        },
+      };
+      const updated = [...covers, copy];
+      setCovers(updated);
+      rebuildAllCoverMeshes(scene, coverMeshMapRef.current, updated, EDITOR_COVER_POSITION);
+      try {
+        await updateConfig({ covers: updated });
+        showToast('Cover duplicated & synced to server');
+      } catch (e) {
+        console.error('[Config] Auto-save failed:', e);
+        showToast('Cover duplicated locally (server sync failed)');
+      }
+    },
+    [covers, showToast],
+  );
+
+  const handleCloseCoverPanel = useCallback(() => {
+    const scene = sceneCtxRef.current?.scene;
+    // Remove preview cover mesh
+    if (coverPreviewIdRef.current && scene) {
+      removeCoverMesh(scene, coverMeshMapRef.current, coverPreviewIdRef.current);
+      coverPreviewIdRef.current = null;
+    }
+    // Restore original cover mesh if we were editing (not adding new)
+    if (scene && coverEditIdx !== null) {
+      const cfg = coversRef.current[coverEditIdx];
+      if (cfg) {
+        const entry = createCoverMesh(scene, cfg, cfg.entityId);
+        setCoverPosition(scene, entry, EDITOR_COVER_POSITION, false);
+        coverMeshMapRef.current[cfg.entityId] = entry;
+      }
+    }
+    setCoverPanelOpen(false);
+    clearPreview();
+    exitPlacingMode();
+    setCoverEditIdx(null);
+  }, [clearPreview, exitPlacingMode, coverEditIdx]);
+  const handleCloseCoverPanelRef = useRef(handleCloseCoverPanel);
+  handleCloseCoverPanelRef.current = handleCloseCoverPanel;
+
+  // Rebuild the live preview cover mesh from current form state + position/normal
+  const rebuildCoverPreview = useCallback(() => {
+    const scene = sceneCtxRef.current?.scene;
+    if (!scene) return;
+
+    const editingCfg = coversRef.current[coverEditIdx ?? -1];
+    const previewId = editingCfg?.entityId || '__cover_preview__';
+
+    // Remove old preview mesh (or the original cover being edited on first call)
+    const oldPreviewId = coverPreviewIdRef.current;
+    if (oldPreviewId) {
+      removeCoverMesh(scene, coverMeshMapRef.current, oldPreviewId);
+    } else if (previewId !== '__cover_preview__') {
+      removeCoverMesh(scene, coverMeshMapRef.current, previewId);
+    }
+    coverPreviewIdRef.current = previewId;
+
+    const info = coverPreviewInfoRef.current;
+    const tempCfg: CoverConfig = {
+      entityId: previewId,
+      label: '',
+      position: positionRef.current,
+      normal: coverNormalRef.current,
+      width: info.width,
+      height: info.height,
+    };
+    const entry = createCoverMesh(scene, tempCfg, '__preview__');
+    setCoverPosition(scene, entry, EDITOR_COVER_POSITION, false);
+    // Tag as preview so placing-mode picks and click-to-edit ignore it
+    entry.housing.metadata = { previewTarget: 'cover' };
+    entry.panel.metadata = { previewTarget: 'cover' };
+    entry.hitbox.metadata = { previewTarget: 'cover' };
+    // Show the hitbox as a magenta wireframe (shared material, reused across rebuilds)
+    let hbMat = scene.getMaterialByName('cover-preview-hitbox-mat') as StandardMaterial | null;
+    if (!hbMat) {
+      hbMat = new StandardMaterial('cover-preview-hitbox-mat', scene);
+      hbMat.emissiveColor = new Color3(1, 0.2, 0.8);
+      hbMat.alpha = 0.3;
+      hbMat.wireframe = true;
+      hbMat.disableLighting = true;
+    }
+    entry.hitbox.material = hbMat;
+    entry.hitbox.visibility = 1;
+    coverMeshMapRef.current[previewId] = entry;
+
+    // Attach position gizmo to the hitbox (delta-based drag)
+    if (gizmoRef.current) {
+      gizmoRef.current.dispose();
+      gizmoRef.current = null;
+    }
+    if (!utilLayerRef.current) {
+      utilLayerRef.current = new UtilityLayerRenderer(scene);
+    }
+    const gizmo = new PositionGizmo(utilLayerRef.current);
+    gizmo.scaleRatio = 1.2;
+    gizmo.updateGizmoRotationToMatchAttachedMesh = false;
+    gizmo.attachedMesh = entry.hitbox;
+
+    let dragStartPos = { ...positionRef.current };
+    let hitboxStart = entry.hitbox.position.clone();
+    const onDragStart = () => {
+      draggingGizmoRef.current = true;
+      posUndoStackRef.current.push({ ...positionRef.current });
+      dragStartPos = { ...positionRef.current };
+      hitboxStart = entry.hitbox.position.clone();
+    };
+    const onDrag = () => {
+      const d = entry.hitbox.position.subtract(hitboxStart);
+      const newPos: LightPosition = {
+        x: parseFloat((dragStartPos.x + d.x).toFixed(3)),
+        y: parseFloat((dragStartPos.y + d.y).toFixed(3)),
+        z: parseFloat((dragStartPos.z + d.z).toFixed(3)),
+      };
+      positionRef.current = newPos;
+      setPosition(newPos);
+    };
+    const onDragEnd = () => {
+      draggingGizmoRef.current = false;
+      document.dispatchEvent(new Event('tour:gizmo-used'));
+      // Force a preview rebuild at the final position (housing/panel follow the hitbox)
+      setPosition({ ...positionRef.current });
+    };
+    for (const ax of [gizmo.xGizmo, gizmo.yGizmo, gizmo.zGizmo]) {
+      ax.dragBehavior.onDragStartObservable.add(onDragStart);
+      ax.dragBehavior.onDragObservable.add(onDrag);
+      ax.dragBehavior.onDragEndObservable.add(onDragEnd);
+    }
+    for (const m of utilLayerRef.current!.utilityLayerScene.meshes) {
+      if (m.material) {
+        (m.material as StandardMaterial).alpha = 0.5;
+      }
+    }
+    gizmoRef.current = gizmo;
+  }, [coverEditIdx]);
+
+  const handleCoverPreviewChange = useCallback(
+    (info: CoverPreviewInfo) => {
+      coverPreviewInfoRef.current = info;
+      if (coverPanelOpenRef.current) rebuildCoverPreview();
+    },
+    [rebuildCoverPreview],
+  );
+
+  const handleSaveCover = useCallback(
+    async (cfg: CoverConfig) => {
+      const scene = sceneCtxRef.current?.scene;
+      if (!scene) return;
+
+      // Clean up preview mesh
+      if (coverPreviewIdRef.current) {
+        removeCoverMesh(scene, coverMeshMapRef.current, coverPreviewIdRef.current);
+        coverPreviewIdRef.current = null;
+      }
+
+      let updated: CoverConfig[];
+      if (coverEditIdx !== null) {
+        updated = covers.map((c, i) => (i === coverEditIdx ? cfg : c));
+      } else {
+        updated = [...covers, cfg];
+      }
+
+      setCovers(updated);
+      clearPreview();
+      rebuildAllCoverMeshes(scene, coverMeshMapRef.current, updated, EDITOR_COVER_POSITION);
+      setCoverPanelOpen(false);
+      exitPlacingMode();
+      setCoverEditIdx(null);
+
+      try {
+        await updateConfig({ covers: updated });
+        showToast('Cover saved & synced to server');
+      } catch (e) {
+        console.error('[Config] Auto-save failed:', e);
+        showToast('Cover saved locally (server sync failed)');
+      }
+    },
+    [covers, coverEditIdx, clearPreview, exitPlacingMode, showToast],
+  );
+
+  // Rebuild cover preview when position/normal changes (skip during gizmo drag)
+  useEffect(() => {
+    if (!coverPanelOpen) return;
+    if (draggingGizmoRef.current) return; // hitbox moves via gizmo; rebuild happens on drag end
+    rebuildCoverPreview();
+  }, [position, coverNormal, coverPanelOpen, rebuildCoverPreview]);
+
   // --- Shadow wall handlers ---
 
   const handleAddWall = useCallback(() => {
@@ -1723,12 +2038,12 @@ export default function ConfigEditor() {
   // Save config to server
   const handleSaveConfig = useCallback(async () => {
     try {
-      await updateConfig({ lights, lightGroups, displays, shadowWalls, tubes });
-      showToast(`Saved ${lights.length} lights + ${displays.length} displays + ${shadowWalls.length} walls + ${tubes.length} tubes to server`);
+      await updateConfig({ lights, lightGroups, displays, covers, shadowWalls, tubes });
+      showToast(`Saved ${lights.length} lights + ${displays.length} displays + ${covers.length} covers + ${shadowWalls.length} walls + ${tubes.length} tubes to server`);
     } catch (e) {
       alert('Failed to save config: ' + (e instanceof Error ? e.message : e));
     }
-  }, [lights, displays, shadowWalls, tubes, showToast]);
+  }, [lights, lightGroups, displays, covers, shadowWalls, tubes, showToast]);
 
   // Load config from server
   const handleLoadConfig = useCallback(async () => {
@@ -1737,11 +2052,14 @@ export default function ConfigEditor() {
       setLights(config.lights || []);
       setLightGroups(config.lightGroups || []);
       setDisplays(config.displays || []);
+      setCovers(config.covers || []);
+      coversRef.current = config.covers || [];
       setShadowWalls(config.shadowWalls || []);
       setTubes(config.tubes || []);
       tubesRef.current = config.tubes || [];
       const scene = sceneCtxRef.current?.scene;
       if (scene) {
+        rebuildAllCoverMeshes(scene, coverMeshMapRef.current, config.covers || [], EDITOR_COVER_POSITION);
         rebuildAllMeshes(scene, meshMapRef.current, config.lights || []);
         rebuildAllDisplayMeshes(scene, displayMeshMapRef.current, config.displays || []);
         for (const entry of Object.values(displayMeshMapRef.current)) {
@@ -1754,7 +2072,7 @@ export default function ConfigEditor() {
         }
         renderMockupLabels(tubeMeshMapRef.current);
       }
-      showToast(`Loaded ${config.lights?.length || 0} lights + ${config.displays?.length || 0} displays + ${config.shadowWalls?.length || 0} walls + ${config.tubes?.length || 0} tubes`);
+      showToast(`Loaded ${config.lights?.length || 0} lights + ${config.displays?.length || 0} displays + ${config.covers?.length || 0} covers + ${config.shadowWalls?.length || 0} walls + ${config.tubes?.length || 0} tubes`);
     } catch (e) {
       alert('Failed to load config: ' + (e instanceof Error ? e.message : e));
     }
@@ -1787,6 +2105,13 @@ export default function ConfigEditor() {
             onClick={() => setEditorMode('displays')}
           >
             Displays ({displays.length})
+          </button>
+          <button
+            className={`editor-tab${editorMode === 'covers' ? ' active' : ''}`}
+            data-tab="covers"
+            onClick={() => setEditorMode('covers')}
+          >
+            Covers ({covers.length})
           </button>
           <button
             className={`editor-tab${editorMode === 'walls' ? ' active' : ''}`}
@@ -1827,6 +2152,14 @@ export default function ConfigEditor() {
               onDelete={handleDeleteDisplay}
               onDuplicate={handleDuplicateDisplay}
             />
+          ) : editorMode === 'covers' ? (
+            <CoverList
+              covers={covers}
+              selectedIdx={coverEditIdx}
+              onSelect={handleEditCover}
+              onDelete={handleDeleteCover}
+              onDuplicate={handleDuplicateCover}
+            />
           ) : editorMode === 'walls' ? (
             <ShadowWallList
               walls={shadowWalls}
@@ -1855,6 +2188,10 @@ export default function ConfigEditor() {
             <button className="btn btn-primary editor-add-btn" onClick={handleAddDisplay}>
               + Add Display
             </button>
+          ) : editorMode === 'covers' ? (
+            <button className="btn btn-primary editor-add-btn" onClick={handleAddCover}>
+              + Add Cover
+            </button>
           ) : editorMode === 'walls' ? (
             <button className="btn btn-primary editor-add-btn" onClick={handleAddWall}>
               + Add Wall
@@ -1877,7 +2214,7 @@ export default function ConfigEditor() {
       <div className="canvas-area editor-canvas">
         <canvas ref={canvasRef} />
         <div className={`mode-banner${placingMode ? ' visible' : ''}`}>
-          {displayPanelOpen ? 'Click on a wall surface to place display' : wallPanelOpen ? 'Click on the model to place wall' : 'Click on the model to place light'}
+          {displayPanelOpen ? 'Click on a wall surface to place display' : coverPanelOpen ? 'Click the center of a window to place the shutter' : wallPanelOpen ? 'Click on the model to place wall' : 'Click on the model to place light'}
         </div>
         <div className="coord-readout">{coordText}</div>
         <div className={`toast${toastVisible ? ' show' : ''}`}>{toastMsg}</div>
@@ -1908,6 +2245,21 @@ export default function ConfigEditor() {
           onEnterPlacingMode={enterPlacingMode}
           onExitPlacingMode={exitPlacingMode}
           onPreviewChange={handleDisplayPreviewChange}
+          placingMode={placingMode}
+          haEntities={haEntities}
+        />
+
+        <CoverForm
+          open={coverPanelOpen}
+          editCover={coverEditIdx !== null ? covers[coverEditIdx] : null}
+          position={position}
+          normal={coverNormal}
+          onPositionChange={handlePositionChange}
+          onSave={handleSaveCover}
+          onClose={handleCloseCoverPanel}
+          onEnterPlacingMode={enterPlacingMode}
+          onExitPlacingMode={exitPlacingMode}
+          onPreviewChange={handleCoverPreviewChange}
           placingMode={placingMode}
           haEntities={haEntities}
         />

@@ -1,8 +1,8 @@
-import type { HAState, LightConfig, LightType } from '../types';
-import type { HACallbacks } from './haWebSocket';
-import { isSimulationActive } from '../contexts/SimulationModeContext';
+import type { CoverConfig, HAState, LightConfig, LightType } from "../types";
+import type { HACallbacks } from "./haWebSocket";
+import { isSimulationActive } from "../contexts/SimulationModeContext";
 
-const STORAGE_KEY = 'demoLightStates';
+const STORAGE_KEY = "demoLightStates";
 
 function loadPersistedStates(): Record<string, HAState> {
   try {
@@ -16,8 +16,12 @@ function loadPersistedStates(): Record<string, HAState> {
 function persistStates(states: Map<string, HAState>): void {
   const obj: Record<string, HAState> = {};
   for (const [id, s] of states) {
-    // Only persist light/switch entities, not sensors
-    if (id.startsWith('light.') || id.startsWith('switch.')) {
+    // Only persist light/switch/cover entities, not sensors
+    if (
+      id.startsWith("light.") ||
+      id.startsWith("switch.") ||
+      id.startsWith("cover.")
+    ) {
       obj[id] = s;
     }
   }
@@ -31,18 +35,29 @@ function randomBlueToRed(): [number, number, number] {
   // Equal-probability zones so blue and red aren't drowned out by pink/purple
   const zone = Math.random();
   let hue: number;
-  if (zone < 0.33)      hue = 240 + Math.random() * 30;  // 240-270: blues
-  else if (zone < 0.66) hue = 280 + Math.random() * 40;  // 280-320: purples
-  else                  hue = 330 + Math.random() * 30;  // 330-360: reds
+  if (zone < 0.33)
+    hue = 240 + Math.random() * 30; // 240-270: blues
+  else if (zone < 0.66)
+    hue = 280 + Math.random() * 40; // 280-320: purples
+  else hue = 330 + Math.random() * 30; // 330-360: reds
 
   const s = 0.8 + Math.random() * 0.2; // 80-100% saturation
   // HSL to RGB (lightness fixed at 50%)
   const c = s;
   const x = c * (1 - Math.abs(((hue / 60) % 2) - 1));
   const m = 0.5 - c / 2;
-  let r = 0, g = 0, b = 0;
-  if (hue < 300)      { r = x; g = 0; b = c; }
-  else                { r = c; g = 0; b = x; }
+  let r = 0,
+    g = 0,
+    b = 0;
+  if (hue < 300) {
+    r = x;
+    g = 0;
+    b = c;
+  } else {
+    r = c;
+    g = 0;
+    b = x;
+  }
   return [
     Math.round((r + m) * 255),
     Math.round((g + m) * 255),
@@ -51,16 +66,19 @@ function randomBlueToRed(): [number, number, number] {
 }
 
 /** Fluctuation config: base value ± range, with optional decimal places. */
-const SENSOR_FLUCTUATION: Record<string, { base: number; range: number; decimals?: number }> = {
-  'sensor.temp_hum_sensor_temperature': { base: 21.3, range: 0.4, decimals: 1 },
-  'sensor.temp_hum_sensor_humidity': { base: 54, range: 3 },
-  'sensor.indoor_temperature': { base: 21.3, range: 0.4, decimals: 1 },
-  'sensor.indoor_humidity': { base: 54, range: 3 },
-  'sensor.home_power': { base: 1842, range: 200 },
-  'sensor.indoor_co2': { base: 623, range: 40 },
-  'sensor.download_speed': { base: 45, range: 30, decimals: 1 },
-  'sensor.upload_speed': { base: 13, range: 8, decimals: 1 },
-  'sensor.water_flow': { base: 3.4, range: 2, decimals: 1 },
+const SENSOR_FLUCTUATION: Record<
+  string,
+  { base: number; range: number; decimals?: number }
+> = {
+  "sensor.temp_hum_sensor_temperature": { base: 21.3, range: 0.4, decimals: 1 },
+  "sensor.temp_hum_sensor_humidity": { base: 54, range: 3 },
+  "sensor.indoor_temperature": { base: 21.3, range: 0.4, decimals: 1 },
+  "sensor.indoor_humidity": { base: 54, range: 3 },
+  "sensor.home_power": { base: 1842, range: 200 },
+  "sensor.indoor_co2": { base: 623, range: 40 },
+  "sensor.download_speed": { base: 45, range: 30, decimals: 1 },
+  "sensor.upload_speed": { base: 13, range: 8, decimals: 1 },
+  "sensor.water_flow": { base: 3.4, range: 2, decimals: 1 },
 };
 
 /**
@@ -73,13 +91,18 @@ export class DemoHAConnection {
   private lightTypes = new Map<string, LightType>();
   private disposed = false;
   private sensorInterval: number | null = null;
+  private coverTimers = new Map<string, number>();
 
   constructor(callbacks: HACallbacks) {
     this.callbacks = callbacks;
   }
 
   /** Bootstrap demo states from the loaded config entity IDs. */
-  start(lightConfigs: LightConfig[], sensorEntityIds: string[]): void {
+  start(
+    lightConfigs: LightConfig[],
+    sensorEntityIds: string[],
+    coverConfigs: CoverConfig[] = [],
+  ): void {
     if (this.disposed) return;
 
     const persisted = loadPersistedStates();
@@ -87,30 +110,54 @@ export class DemoHAConnection {
     // Store light types and restore persisted states or default to "off"
     for (const lc of lightConfigs) {
       this.lightTypes.set(lc.entityId, lc.type);
-      this.states.set(lc.entityId, persisted[lc.entityId] ?? {
-        entity_id: lc.entityId,
-        state: 'off',
-        attributes: { brightness: 0 },
-      });
+      this.states.set(
+        lc.entityId,
+        persisted[lc.entityId] ?? {
+          entity_id: lc.entityId,
+          state: "off",
+          attributes: { brightness: 0 },
+        },
+      );
+    }
+
+    // Covers default to fully open
+    for (const cc of coverConfigs) {
+      const saved = persisted[cc.entityId];
+      // Never restore a transient moving state
+      const state =
+        saved && (saved.state === "open" || saved.state === "closed")
+          ? saved
+          : null;
+      this.states.set(
+        cc.entityId,
+        state ?? {
+          entity_id: cc.entityId,
+          state: "open",
+          attributes: { current_position: 100 },
+        },
+      );
     }
 
     // Demo sensor values — realistic defaults for common entity IDs
-    const sensorDefaults: Record<string, { state: string; attributes: Record<string, unknown> }> = {
-      'sensor.temp_hum_sensor_temperature': { state: '21.3', attributes: {} },
-      'sensor.temp_hum_sensor_humidity': { state: '54', attributes: {} },
-      'sensor.indoor_temperature': { state: '21.3', attributes: {} },
-      'sensor.indoor_humidity': { state: '54', attributes: {} },
-      'sensor.home_power': { state: '1842', attributes: {} },
-      'sensor.indoor_co2': { state: '623', attributes: {} },
-      'sensor.download_speed': { state: '45.2', attributes: {} },
-      'sensor.upload_speed': { state: '12.8', attributes: {} },
-      'sensor.water_flow': { state: '3.4', attributes: {} },
-      'climate.thermostat': {
-        state: 'heat',
+    const sensorDefaults: Record<
+      string,
+      { state: string; attributes: Record<string, unknown> }
+    > = {
+      "sensor.temp_hum_sensor_temperature": { state: "21.3", attributes: {} },
+      "sensor.temp_hum_sensor_humidity": { state: "54", attributes: {} },
+      "sensor.indoor_temperature": { state: "21.3", attributes: {} },
+      "sensor.indoor_humidity": { state: "54", attributes: {} },
+      "sensor.home_power": { state: "1842", attributes: {} },
+      "sensor.indoor_co2": { state: "623", attributes: {} },
+      "sensor.download_speed": { state: "45.2", attributes: {} },
+      "sensor.upload_speed": { state: "12.8", attributes: {} },
+      "sensor.water_flow": { state: "3.4", attributes: {} },
+      "climate.thermostat": {
+        state: "heat",
         attributes: {
           temperature: 20,
           current_temperature: 21.3,
-          hvac_mode: 'heat',
+          hvac_mode: "heat",
           min_temp: 7,
           max_temp: 30,
         },
@@ -120,7 +167,7 @@ export class DemoHAConnection {
       const defaults = sensorDefaults[id];
       this.states.set(id, {
         entity_id: id,
-        state: defaults?.state ?? '0',
+        state: defaults?.state ?? "0",
         attributes: defaults?.attributes ?? {},
       });
     }
@@ -130,20 +177,21 @@ export class DemoHAConnection {
       if (this.disposed) return;
       for (const id of sensorEntityIds) {
         const current = this.states.get(id);
-        if (!current || id.startsWith('climate.')) continue;
+        if (!current || id.startsWith("climate.")) continue;
         const cfg = SENSOR_FLUCTUATION[id];
         if (!cfg) continue;
         const base = cfg.base;
         const jitter = (Math.random() - 0.5) * 2 * cfg.range;
         const value = Math.max(0, base + jitter);
-        const formatted = cfg.decimals != null
-          ? value.toFixed(cfg.decimals)
-          : String(Math.round(value));
+        const formatted =
+          cfg.decimals != null
+            ? value.toFixed(cfg.decimals)
+            : String(Math.round(value));
         this.updateState(id, formatted, current.attributes);
       }
     }, 3000);
 
-    this.callbacks.onStatusChanged?.('connected');
+    this.callbacks.onStatusChanged?.("connected");
     this.callbacks.onInitialStates?.([...this.states.values()]);
   }
 
@@ -156,21 +204,48 @@ export class DemoHAConnection {
     if (this.disposed) return;
 
     // Script calls: simulate 1.5s delay
-    if (domain === 'script') {
+    if (domain === "script") {
       await new Promise((r) => setTimeout(r, 1500));
       return;
     }
 
     // Climate service calls
-    if (domain === 'climate') {
+    if (domain === "climate") {
       const current = this.states.get(entityId);
       const attrs = { ...(current?.attributes ?? {}) };
-      if (service === 'set_temperature' && data?.temperature !== undefined) {
+      if (service === "set_temperature" && data?.temperature !== undefined) {
         attrs.temperature = data.temperature;
-        this.updateState(entityId, current?.state ?? 'heat', attrs);
-      } else if (service === 'set_hvac_mode' && data?.hvac_mode !== undefined) {
+        this.updateState(entityId, current?.state ?? "heat", attrs);
+      } else if (service === "set_hvac_mode" && data?.hvac_mode !== undefined) {
         attrs.hvac_mode = data.hvac_mode;
         this.updateState(entityId, data.hvac_mode as string, attrs);
+      }
+      return;
+    }
+
+    // Cover service calls — simulate gradual movement
+    if (domain === "cover") {
+      const current = this.states.get(entityId);
+      const pos =
+        (current?.attributes.current_position as number | undefined) ??
+        (current?.state === "closed" ? 0 : 100);
+      if (service === "open_cover") {
+        this.moveCover(entityId, 100);
+      } else if (service === "close_cover") {
+        this.moveCover(entityId, 0);
+      } else if (
+        service === "set_cover_position" &&
+        data?.position !== undefined
+      ) {
+        this.moveCover(
+          entityId,
+          Math.min(Math.max(data.position as number, 0), 100),
+        );
+      } else if (service === "stop_cover") {
+        this.stopCover(entityId, pos);
+      } else if (service === "toggle") {
+        // HA semantics: anything but fully closed toggles to closed
+        this.moveCover(entityId, pos > 0 ? 0 : 100);
       }
       return;
     }
@@ -178,38 +253,97 @@ export class DemoHAConnection {
     const current = this.states.get(entityId);
     const attrs = { ...(current?.attributes ?? {}) };
 
-    if (service === 'toggle') {
-      const wasOn = current?.state === 'on';
+    if (service === "toggle") {
+      const wasOn = current?.state === "on";
       if (wasOn) {
-        this.updateState(entityId, 'off', { ...attrs, brightness: 0 });
+        this.updateState(entityId, "off", { ...attrs, brightness: 0 });
       } else {
         const onAttrs = { ...attrs, brightness: attrs.brightness || 255 };
         const lt = this.lightTypes.get(entityId);
-        if (lt === 'rgb' || lt === 'rgbw') {
+        if (lt === "rgb" || lt === "rgbw") {
           onAttrs.rgb_color = randomBlueToRed();
         }
-        this.updateState(entityId, 'on', onAttrs);
+        this.updateState(entityId, "on", onAttrs);
       }
       return;
     }
 
-    if (service === 'turn_on') {
-      if (data?.brightness !== undefined) attrs.brightness = data.brightness as number;
+    if (service === "turn_on") {
+      if (data?.brightness !== undefined)
+        attrs.brightness = data.brightness as number;
       if (!attrs.brightness) attrs.brightness = 255;
-      if (data?.rgb_color !== undefined) attrs.rgb_color = data.rgb_color as [number, number, number];
-      if (data?.color_temp !== undefined) attrs.color_temp = data.color_temp as number;
-      if (data?.white_value !== undefined) attrs.white_value = data.white_value as number;
-      this.updateState(entityId, 'on', attrs);
+      if (data?.rgb_color !== undefined)
+        attrs.rgb_color = data.rgb_color as [number, number, number];
+      if (data?.color_temp !== undefined)
+        attrs.color_temp = data.color_temp as number;
+      if (data?.white_value !== undefined)
+        attrs.white_value = data.white_value as number;
+      this.updateState(entityId, "on", attrs);
       return;
     }
 
-    if (service === 'turn_off') {
-      this.updateState(entityId, 'off', { ...attrs, brightness: 0 });
+    if (service === "turn_off") {
+      this.updateState(entityId, "off", { ...attrs, brightness: 0 });
       return;
     }
   }
 
-  private updateState(entityId: string, state: string, attributes: Record<string, unknown>): void {
+  /** Animate a cover toward a target position, emitting opening/closing updates. */
+  private moveCover(entityId: string, target: number): void {
+    this.stopTimer(entityId);
+    const current = this.states.get(entityId);
+    let pos =
+      (current?.attributes.current_position as number | undefined) ??
+      (current?.state === "closed" ? 0 : 100);
+    if (pos === target) return;
+
+    const TICK_MS = 120;
+    const STEP = 100 / (2200 / TICK_MS); // full travel ≈ 2.2s, matches the 3D animation
+    const movingState = target > pos ? "opening" : "closing";
+    this.updateState(entityId, movingState, {
+      current_position: Math.round(pos),
+    });
+
+    const timer = window.setInterval(() => {
+      if (this.disposed) return;
+      const delta = target - pos;
+      if (Math.abs(delta) <= STEP) {
+        pos = target;
+        this.stopTimer(entityId);
+        this.updateState(entityId, pos === 0 ? "closed" : "open", {
+          current_position: Math.round(pos),
+        });
+        return;
+      }
+      pos += Math.sign(delta) * STEP;
+      this.updateState(entityId, movingState, {
+        current_position: Math.round(pos),
+      });
+    }, TICK_MS);
+    this.coverTimers.set(entityId, timer);
+  }
+
+  /** Halt a moving cover at its current position. */
+  private stopCover(entityId: string, pos: number): void {
+    this.stopTimer(entityId);
+    this.updateState(entityId, pos === 0 ? "closed" : "open", {
+      current_position: Math.round(pos),
+    });
+  }
+
+  private stopTimer(entityId: string): void {
+    const timer = this.coverTimers.get(entityId);
+    if (timer !== undefined) {
+      clearInterval(timer);
+      this.coverTimers.delete(entityId);
+    }
+  }
+
+  private updateState(
+    entityId: string,
+    state: string,
+    attributes: Record<string, unknown>,
+  ): void {
     const newState: HAState = { entity_id: entityId, state, attributes };
     this.states.set(entityId, newState);
     persistStates(this.states);
@@ -234,6 +368,8 @@ export class DemoHAConnection {
       clearInterval(this.sensorInterval);
       this.sensorInterval = null;
     }
+    for (const timer of this.coverTimers.values()) clearInterval(timer);
+    this.coverTimers.clear();
     this.states.clear();
   }
 }
