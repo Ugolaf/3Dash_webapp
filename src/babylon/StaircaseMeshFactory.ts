@@ -7,8 +7,8 @@ import {
   Vector3,
   TransformNode,
   Mesh,
-} from '@babylonjs/core';
-import type { StaircaseConfig } from '../types';
+} from "@babylonjs/core";
+import type { StaircaseConfig } from "../types";
 
 /** Number of steps in the procedural staircase. */
 const STEP_COUNT = 6;
@@ -18,11 +18,6 @@ const STEP_RUN = 0.3;
 const STEP_RISE = 0.2;
 /** Staircase width (world units). */
 const WIDTH = 1.2;
-/** Accent color per direction (hue is the primary up/down cue). */
-const ACCENT: Record<StaircaseConfig['style'], string> = {
-  up: '#4ea3ff',   // cool blue = go up
-  down: '#ff9d4e', // warm amber = go down
-};
 
 export interface StaircaseMeshEntry {
   root: TransformNode;
@@ -36,24 +31,18 @@ export interface StaircaseMeshEntry {
 
 export type StaircaseMeshMap = Record<string, StaircaseMeshEntry>;
 
-function hexToColor3(hex: string): Color3 {
-  const h = hex.replace('#', '');
-  const n = parseInt(h, 16);
-  return new Color3(((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255);
-}
-
 /**
- * Build a clickable staircase. `style` drives both the visual (an ascending vs
- * descending block profile + hue) and the floating direction arrow. The whole
- * volume is covered by an invisible hitbox stamped with `metadata.staircaseId`
- * so the existing pointer handlers can route clicks to a floor switch.
+ * Build a clickable staircase. The block profile encodes the direction
+ * (ascending vs descending steps); the fill is black to match the other
+ * clickable elements. The whole volume is covered by an invisible hitbox
+ * stamped with `metadata.staircaseId` so the pointer handlers route clicks
+ * to a floor switch.
  */
 export function createStaircaseMesh(
   scene: Scene,
   cfg: StaircaseConfig,
 ): StaircaseMeshEntry {
-  const isUp = cfg.style === 'up';
-  const accent = hexToColor3(ACCENT[cfg.style]);
+  const isUp = cfg.style === "up";
   const totalRun = STEP_COUNT * STEP_RUN;
   const totalRise = STEP_COUNT * STEP_RISE;
 
@@ -61,13 +50,12 @@ export function createStaircaseMesh(
   root.position = new Vector3(cfg.position.x, cfg.position.y, cfg.position.z);
   root.rotation.y = cfg.rotationY ?? 0;
 
-  // Step material: an accent tint plus a gentle self-illumination so the hue
-  // (blue = up, amber = down) reads at a glance regardless of the time of day,
-  // without any floating indicator.
+  // Black fill with black edges — same look as the other clickable elements.
+  // Kept lit (very dark, not pure 0) so the sun still shades the treads and the
+  // ascending/descending step profile reads instead of a flat black blob.
   const stepMat = new StandardMaterial(`stairmat_${cfg.id}`, scene);
-  stepMat.diffuseColor = Color3.Lerp(accent, new Color3(1, 1, 1), 0.35);
-  stepMat.emissiveColor = accent.scale(0.35);
-  stepMat.specularColor = new Color3(0.1, 0.1, 0.1);
+  stepMat.diffuseColor = new Color3(0.25, 0.25, 0.25);
+  stepMat.specularColor = new Color3(0, 0, 0);
   stepMat.maxSimultaneousLights = 48;
 
   // Solid right-triangle block profile, always resting on the floor (so it is
@@ -77,16 +65,27 @@ export function createStaircaseMesh(
   for (let i = 0; i < STEP_COUNT; i++) {
     const treadHeight = (isUp ? i + 1 : STEP_COUNT - i) * STEP_RISE;
     const z = -totalRun / 2 + i * STEP_RUN + STEP_RUN / 2;
-    const box = MeshBuilder.CreateBox(`stair_${cfg.id}_step_${i}`, {
-      width: WIDTH,
-      height: treadHeight,
-      depth: STEP_RUN,
-    }, scene);
+    const box = MeshBuilder.CreateBox(
+      `stair_${cfg.id}_step_${i}`,
+      {
+        width: WIDTH,
+        height: treadHeight,
+        depth: STEP_RUN,
+      },
+      scene,
+    );
     box.position.z = z;
     box.position.y = treadHeight / 2;
     stepMeshes.push(box);
   }
-  const steps = Mesh.MergeMeshes(stepMeshes, true, true, undefined, false, false) as Mesh;
+  const steps = Mesh.MergeMeshes(
+    stepMeshes,
+    true,
+    true,
+    undefined,
+    false,
+    false,
+  ) as Mesh;
   steps.name = `stair_${cfg.id}_steps`;
   steps.material = stepMat;
   steps.parent = root;
@@ -99,11 +98,15 @@ export function createStaircaseMesh(
 
   // Invisible hitbox spanning the whole staircase footprint.
   const hitH = totalRise + 0.2;
-  const hitbox = MeshBuilder.CreateBox(`stair_hitbox_${cfg.id}`, {
-    width: WIDTH + 0.1,
-    height: hitH,
-    depth: totalRun + 0.1,
-  }, scene);
+  const hitbox = MeshBuilder.CreateBox(
+    `stair_hitbox_${cfg.id}`,
+    {
+      width: WIDTH + 0.1,
+      height: hitH,
+      depth: totalRun + 0.1,
+    },
+    scene,
+  );
   hitbox.parent = root;
   hitbox.position.y = totalRise / 2;
   hitbox.visibility = 0;
@@ -113,7 +116,11 @@ export function createStaircaseMesh(
   return { root, steps, hitbox, stepMat, config: cfg };
 }
 
-export function removeStaircaseMesh(scene: Scene, map: StaircaseMeshMap, id: string): void {
+export function removeStaircaseMesh(
+  scene: Scene,
+  map: StaircaseMeshMap,
+  id: string,
+): void {
   const entry = map[id];
   if (!entry) return;
   entry.hitbox.dispose();
