@@ -25,6 +25,41 @@
   touch-action: none;
 }
 
+/* Floor transition fade — covers the canvas while the floor swaps */
+.floor-fade {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 320ms ease;
+  z-index: 40;
+}
+
+.floor-fade.visible {
+  opacity: 1;
+  pointer-events: all; /* block clicks mid-transition */
+}
+
+/* Current-floor badge */
+.floor-badge {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  padding: 5px 14px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 85%, transparent);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  pointer-events: none;
+  backdrop-filter: blur(6px);
+}
+
 /* Home view setting overlay */
 .home-view-overlay {
   position: absolute;

@@ -81,6 +81,21 @@ export interface CoverConfig {
   height: number;
 }
 
+// --- Cameras (dome CCTV) ---
+
+export interface CameraConfig {
+  id: string;
+  /** HA camera entity ID (e.g. camera.front_door). */
+  entityId: string;
+  label: string;
+  /** Mount point (world coordinates) — on a ceiling or a wall. */
+  position: LightPosition;
+  /** Yaw rotation in radians (aiming direction). Default 0. */
+  rotationY?: number;
+  /** Pitch in radians: 0 = ceiling (dome down), ~π/2 = wall (dome horizontal). */
+  tilt?: number;
+}
+
 // --- Shadow Walls (invisible roof / sun blockers) ---
 
 export interface ShadowWallConfig {
@@ -158,6 +173,44 @@ export interface OnboardingState {
   completed: boolean;
 }
 
+// --- Floors & Staircases (multi-floor navigation) ---
+
+export interface StaircaseConfig {
+  id: string;
+  /** Visual style and travel direction. */
+  style: 'up' | 'down';
+  /** Floor this staircase navigates TO when clicked (FloorConfig.id). */
+  targetFloorId: string;
+  /** Base position (world coordinates) where the staircase sits on this floor. */
+  position: LightPosition;
+  /** Yaw rotation in radians (facing direction). Default 0. */
+  rotationY?: number;
+  /** Optional label shown in the editor / on hover. */
+  label?: string;
+}
+
+/**
+ * A single floor of the building: its own model plus its own entities.
+ * When AppConfig.floors is absent, the legacy top-level arrays act as one
+ * implicit floor (see getFloors in utils/floors.ts).
+ */
+export interface FloorConfig {
+  id: string;
+  name: string;
+  /** Model-storage key (IndexedDB). Legacy single-model configs use 'model'. */
+  modelId: string;
+  /** Ordinal for editor ordering. */
+  order?: number;
+  lights: LightConfig[];
+  lightGroups?: LightGroup[];
+  displays?: DisplayConfig[];
+  covers?: CoverConfig[];
+  shadowWalls?: ShadowWallConfig[];
+  tubes?: TubeConfig[];
+  staircases?: StaircaseConfig[];
+  cameras?: CameraConfig[];
+}
+
 export interface AppConfig {
   location: {
     latitude: number;
@@ -173,6 +226,11 @@ export interface AppConfig {
   sidePanel?: SidePanelConfig;
   tubes?: TubeConfig[];
   onboarding?: OnboardingState;
+  /** Multi-floor layout. When present, floors are authoritative and the
+   *  top-level lights/covers/… arrays act as a fallback single floor. */
+  floors?: FloorConfig[];
+  /** Id of the floor currently shown (defaults to the first floor). */
+  activeFloorId?: string;
 }
 
 export interface HASettings {
@@ -195,6 +253,8 @@ export interface FullConfig {
   sidePanel?: SidePanelConfig;
   tubes?: TubeConfig[];
   onboarding?: OnboardingState;
+  floors?: FloorConfig[];
+  activeFloorId?: string;
 }
 
 export interface HAStateAttributes {

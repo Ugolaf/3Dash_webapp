@@ -101,6 +101,18 @@ export function createModelShadow(
   shadowMesh.applyFog = false;
 }
 
+/**
+ * Dispose only the fake ground shadow blob, leaving the grid intact.
+ * Used on floor switches so the next floor can recreate its blob at the new
+ * model center without tearing down the persistent grid.
+ */
+export function disposeModelShadow(): void {
+  shadowMesh?.dispose();
+  shadowMat?.dispose();
+  shadowMesh = null;
+  shadowMat = null;
+}
+
 /** Dispose all grid resources. */
 export function disposeGroundGrid(): void {
   groundMesh?.dispose();

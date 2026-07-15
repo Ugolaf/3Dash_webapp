@@ -466,6 +466,61 @@
 
 .field-input:focus { border-color: var(--accent); }
 
+/* Segmented up/down toggle (staircase form) */
+.segmented {
+  display: flex;
+  gap: 4px;
+}
+.segmented-btn {
+  flex: 1;
+  padding: 7px 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.segmented-btn.active {
+  border-color: var(--accent);
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+/* Floor selector bar */
+.floor-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.floor-bar select {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 11px;
+  padding: 6px 8px;
+  outline: none;
+}
+.floor-bar-btn {
+  padding: 6px 9px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  transition: color 0.15s, border-color 0.15s;
+}
+.floor-bar-btn:hover { color: var(--text); border-color: var(--accent); }
+
 .field-select {
   background: var(--bg);
   border: 1px solid var(--border);

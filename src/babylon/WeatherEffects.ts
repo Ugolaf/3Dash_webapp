@@ -14,6 +14,8 @@ const EMIT_HEIGHT = 15; // spawn height above ground
 
 export interface WeatherEffectsContext {
   updateWeather(data: WeatherData): number;
+  /** Re-point the cloud-shadow softening at a new sun generator (floor switch). */
+  setShadowGenerator(gen: ShadowGenerator | undefined): void;
   dispose(): void;
 }
 
@@ -50,6 +52,7 @@ function createSnowTexture(scene: Scene): DynamicTexture {
 
 export function createWeatherEffects(scene: Scene, shadowGen?: ShadowGenerator): WeatherEffectsContext {
   const emitter = Vector3.Zero();
+  let currentShadowGen = shadowGen;
 
   // --- Rain ---
   const rain = new ParticleSystem('rain', 4000, scene);
@@ -149,9 +152,9 @@ export function createWeatherEffects(scene: Scene, shadowGen?: ShadowGenerator):
     }
 
     // --- Shadow softening when cloudy ---
-    if (shadowGen) {
-      shadowGen.darkness = (data.cloud_cover / 100) * 0.7;
-      shadowGen.normalBias = 0.02 + (data.cloud_cover / 100) * 0.08;
+    if (currentShadowGen) {
+      currentShadowGen.darkness = (data.cloud_cover / 100) * 0.7;
+      currentShadowGen.normalBias = 0.02 + (data.cloud_cover / 100) * 0.08;
     }
 
     // --- Cloud cover factor ---
@@ -166,5 +169,9 @@ export function createWeatherEffects(scene: Scene, shadowGen?: ShadowGenerator):
     snowTex.dispose();
   }
 
-  return { updateWeather, dispose };
+  function setShadowGenerator(gen: ShadowGenerator | undefined) {
+    currentShadowGen = gen;
+  }
+
+  return { updateWeather, setShadowGenerator, dispose };
 }

@@ -118,6 +118,8 @@ export interface EdgeOutlineControls {
   postProcess: PostProcess;
   /** Enable or disable the post-process edge detection. */
   setEnabled: (enabled: boolean) => void;
+  /** Detach and dispose the post-process (e.g. before a floor rebuild). */
+  dispose: () => void;
 }
 
 /**
@@ -186,6 +188,10 @@ export function createEdgeOutline(
       } else {
         camera.detachPostProcess(postProcess);
       }
+    },
+    dispose() {
+      camera.detachPostProcess(postProcess);
+      postProcess.dispose(camera);
     },
   };
 }

@@ -1,6 +1,6 @@
 import JSZip from 'jszip';
 import type { AppConfig, CoverConfig, DisplayConfig, LightConfig, LightGroup, ShadowWallConfig, SidePanelConfig, TubeConfig } from '../types';
-import { saveModel as dbSaveModel, getModel as dbGetModel, deleteModel as dbDeleteModel } from './storageApi';
+import { saveModel as dbSaveModel, getModel as dbGetModel, deleteModel as dbDeleteModel, listModelKeys as dbListModelKeys } from './storageApi';
 import { getSettings, setAllSettings, type AppSettings } from './settingsStore';
 import { isSimulationActive } from '../contexts/SimulationModeContext';
 
@@ -51,6 +51,8 @@ export function updateConfig(data: {
   sidePanel?: SidePanelConfig;
   tubes?: TubeConfig[];
   onboarding?: { completed: boolean };
+  floors?: import('../types').FloorConfig[];
+  activeFloorId?: string;
 }): void {
   if (isSimulationActive()) {
     // Update in-memory override so the UI reacts, but never persist
@@ -64,20 +66,26 @@ export function updateConfig(data: {
   localStorage.setItem(CONFIG_KEY, JSON.stringify(merged));
 }
 
-/** Store a GLB model file in IndexedDB. */
-export async function uploadModel(file: File): Promise<void> {
-  await dbSaveModel(file);
+/** Store a GLB model file in IndexedDB under the given model key (default 'model'). */
+export async function uploadModel(file: File, modelId: string = 'model'): Promise<void> {
+  await dbSaveModel(file, modelId);
 }
 
-/** Get the GLB model blob from IndexedDB. */
-export async function getModelBlob(): Promise<Blob | null> {
-  return dbGetModel();
+/** Get a GLB model blob from IndexedDB by model key (default 'model'). */
+export async function getModelBlob(modelId: string = 'model'): Promise<Blob | null> {
+  return dbGetModel(modelId);
 }
 
-/** Remove config from localStorage and model from IndexedDB. */
+/** Delete a single floor's model blob. */
+export async function deleteModelBlob(modelId: string): Promise<void> {
+  await dbDeleteModel(modelId);
+}
+
+/** Remove config from localStorage and every stored model from IndexedDB. */
 export async function resetConfig(): Promise<void> {
   localStorage.removeItem(CONFIG_KEY);
-  await dbDeleteModel();
+  const keys = await dbListModelKeys();
+  await Promise.all(keys.map((k) => dbDeleteModel(k)));
 }
 
 /** Export config + settings + model as a downloadable ZIP. */
@@ -92,10 +100,14 @@ export async function exportBackup(): Promise<void> {
   const settings = getSettings();
   zip.file('settings.json', JSON.stringify(settings, null, 2));
 
-  // Model from IndexedDB
-  const modelBlob = await dbGetModel();
-  if (modelBlob) {
-    zip.file('apartment.glb', modelBlob);
+  // Every stored floor model (keyed by modelId). The default 'model' key is
+  // also written as apartment.glb so older single-model importers still work.
+  const modelKeys = await dbListModelKeys();
+  for (const key of modelKeys) {
+    const blob = await dbGetModel(key);
+    if (!blob) continue;
+    zip.file(`models/${key}.glb`, blob);
+    if (key === 'model') zip.file('apartment.glb', blob);
   }
 
   const blob = await zip.generateAsync({ type: 'blob' });
@@ -140,13 +152,25 @@ export async function importBackup(file: File): Promise<{ ok: boolean; hasModel:
     setAllSettings(importedSettings);
   }
 
-  // Model
-  const modelFile = zip.file('apartment.glb');
+  // Models — restore each floor's GLB from the models/ folder, falling back to
+  // the legacy single apartment.glb.
   let hasModel = false;
-  if (modelFile) {
-    const modelBlob = await modelFile.async('blob');
-    await dbSaveModel(modelBlob);
+  const modelEntries: Array<{ key: string; file: import('jszip').JSZipObject }> = [];
+  zip.forEach((path, entry) => {
+    if (path.startsWith('models/') && path.endsWith('.glb')) {
+      modelEntries.push({ key: path.slice('models/'.length, -'.glb'.length), file: entry });
+    }
+  });
+  for (const { key, file } of modelEntries) {
+    await dbSaveModel(await file.async('blob'), key);
     hasModel = true;
+  }
+  if (!hasModel) {
+    const modelFile = zip.file('apartment.glb');
+    if (modelFile) {
+      await dbSaveModel(await modelFile.async('blob'), 'model');
+      hasModel = true;
+    }
   }
 
   return { ok: true, hasModel, hasSettings };

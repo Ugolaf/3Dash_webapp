@@ -25,7 +25,20 @@ import {
   setCoverPosition,
   type CoverMeshMap,
 } from '../../babylon/CoverMeshFactory';
+import {
+  createStaircaseMesh,
+  removeStaircaseMesh,
+  type StaircaseMeshMap,
+} from '../../babylon/StaircaseMeshFactory';
+import {
+  createCameraMesh,
+  removeCameraMesh,
+  type CameraMeshMap,
+} from '../../babylon/CameraMeshFactory';
+import CameraModal from '../../components/CameraModal';
 import { getConfig, updateConfig, getModelBlob } from '../../services/configApi';
+import { getActiveFloor, getFloors, collectAllEntityIds, findLightConfig, findCoverConfig, findDisplayConfig, findTubeConfig, findCameraConfig } from '../../utils/floors';
+import type { FloorConfig, CameraConfig } from '../../types';
 import { getEntityCache, setEntityCache } from '../../services/entityCache';
 import type { HAEntityOption } from '../../components/EntityPicker';
 import { getSetting, updateSettings, type HomeViewPose } from '../../services/settingsStore';
@@ -39,7 +52,7 @@ import { miredToKelvin, kelvinToRGB } from '../../utils/color';
 import { updateSunPosition, minutesToLabel } from '../../babylon/SunController';
 import { createWeatherEffects, type WeatherEffectsContext } from '../../babylon/WeatherEffects';
 import { fetchWeather, type WeatherData } from '../../services/weatherApi';
-import { showGroundGrid, hideGroundGrid, syncGridColors, disposeGroundGrid, createModelShadow } from '../../babylon/GroundGrid';
+import { showGroundGrid, hideGroundGrid, syncGridColors, disposeGroundGrid, disposeModelShadow, createModelShadow } from '../../babylon/GroundGrid';
 import { createTubeMeshes, updateTubeValue, disposeAllTubes, setTubeTheme, type TubeMap } from '../../babylon/TubeMeshFactory';
 import HUD from '../../components/HUD';
 import LightModal from '../../components/LightModal';
@@ -100,6 +113,10 @@ export default function Dashboard() {
   const [coverModalLabel, setCoverModalLabel] = useState('');
   const [coverModalState, setCoverModalState] = useState<HAState | null>(null);
 
+  const [cameraModalVisible, setCameraModalVisible] = useState(false);
+  const [cameraModalConfig, setCameraModalConfig] = useState<CameraConfig | null>(null);
+  const [cameraModalState, setCameraModalState] = useState<HAState | null>(null);
+
   const [remoteModalVisible, setRemoteModalVisible] = useState(false);
   const [remoteModalEntityId, setRemoteModalEntityId] = useState<string | null>(null);
   const [remoteModalLabel, setRemoteModalLabel] = useState('');
@@ -153,6 +170,25 @@ export default function Dashboard() {
   const edgeOutlineRef = useRef<EdgeOutlineControls | null>(null);
   const weatherRef = useRef<WeatherEffectsContext | null>(null);
   const pollWeatherRef = useRef<() => void>(() => {});
+
+  // ── Multi-floor state ──────────────────────────────────────────
+  const staircaseMapRef = useRef<StaircaseMeshMap>({});
+  const cameraMeshMapRef = useRef<CameraMeshMap>({});
+  /** Every mesh imported by loadModel (incl. __root__) — disposed on teardown. */
+  const importedMeshesRef = useRef<AbstractMesh[]>([]);
+  /** Shadow-wall meshes for the current floor — disposed on teardown. */
+  const shadowWallMeshesRef = useRef<Mesh[]>([]);
+  const sunShadowGenRef = useRef<ShadowGenerator | null>(null);
+  const activeFloorIdRef = useRef<string | null>(null);
+  const switchingFloorRef = useRef(false);
+  /** Cached demo GLB blob (reused for every simulation floor). */
+  const simModelBlobRef = useRef<Blob | null>(null);
+  /** Bumped on each buildFloor call to abort a superseded/unmounted build. */
+  const buildTokenRef = useRef(0);
+  const fadeRef = useRef<HTMLDivElement>(null);
+  const [fadeVisible, setFadeVisible] = useState(false);
+  const [floors, setFloors] = useState<FloorConfig[]>([]);
+  const [activeFloorId, setActiveFloorId] = useState<string | null>(null);
   const cloudCoverFactorRef = useRef(1);
   const [cloudCoverFactor, setCloudCoverFactor] = useState(1);
   const [currentWeather, setCurrentWeather] = useState<WeatherData | null>(null);
@@ -466,7 +502,7 @@ export default function Dashboard() {
       const entry = meshMapRef.current[lightEntityId];
       if (!entry || !entry.light) return;
 
-      const cfg = configRef.current?.lights.find((l) => l.entityId === lightEntityId);
+      const cfg = configRef.current ? findLightConfig(configRef.current, lightEntityId) : undefined;
       if (!cfg?.remoteButtons) return;
 
       // Find the button whose entityId ends with _<mode>
@@ -524,7 +560,7 @@ export default function Dashboard() {
 
       for (const pl of allLights) pl.setEnabled(true);
 
-      const cfg = configRef.current?.lights.find((l) => l.entityId === entityId);
+      const cfg = configRef.current ? findLightConfig(configRef.current, entityId) : undefined;
       const haBrightness = (attrs.brightness ?? 255) / 255;
       const multiplier = cfg?.brightness ?? 1;
       // Strip sub-lights share the total intensity; single lights get full intensity
@@ -673,6 +709,259 @@ export default function Dashboard() {
     pendingRef.current.set(entityId, { observer: observer!, meshes, state, timer });
   }, [showErrorFeedback]);
 
+  // ── Per-floor build / teardown (rebuild-on-switch) ─────────────
+  const MAX_POINT_SHADOWS = 6;
+
+  /** Resolve a floor's GLB blob (cached shared blob in simulation). */
+  const resolveFloorModel = useCallback(async (floorCfg: FloorConfig): Promise<Blob | null> => {
+    if (simulationMode) {
+      if (!simModelBlobRef.current) {
+        const resp = await fetch(SIMULATION_MODEL_URL);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        simModelBlobRef.current = await resp.blob();
+      }
+      return simModelBlobRef.current;
+    }
+    return getModelBlob(floorCfg.modelId);
+  }, [simulationMode]);
+
+  /** Replay cached HA states onto the freshly-built floor's meshes. */
+  const seedFloorFromCache = useCallback((floorCfg: FloorConfig) => {
+    const states = lastStatesRef.current;
+    for (const l of floorCfg.lights ?? []) {
+      if (states[l.entityId]) applyLightState(l.entityId, states[l.entityId]);
+    }
+    for (const c of floorCfg.covers ?? []) {
+      if (states[c.entityId]) applyCoverState(c.entityId, states[c.entityId]);
+    }
+    for (const entry of Object.values(displayMeshMapRef.current)) {
+      updateDisplayTexture(entry, states);
+      setDisplayAnimation(entry, resolveDisplayAnimation(entry.config, states));
+    }
+    for (const [entityId, state] of Object.entries(states)) {
+      updateTubeValue(tubeMapRef.current, entityId, state.state);
+    }
+  }, [applyLightState, applyCoverState]);
+
+  /**
+   * Build a floor: load its model and create all of its entity meshes,
+   * shadows, edge outline and ground blob. Only one floor is ever resident.
+   */
+  const buildFloor = useCallback(async (
+    floorCfg: FloorConfig,
+    opts: { useHomePose: boolean; seedFromCache: boolean },
+  ): Promise<void> => {
+    const ctx = sceneCtxRef.current;
+    if (!ctx) return;
+    const myToken = ++buildTokenRef.current;
+    const aborted = () => buildTokenRef.current !== myToken;
+
+    let modelBlob: Blob | null;
+    try {
+      modelBlob = await resolveFloorModel(floorCfg);
+    } catch (e) {
+      console.error('[Floor] Model load failed:', e);
+      setModelStatus('failed');
+      setModelStatusColor('var(--red)');
+      return;
+    }
+    if (aborted()) return;
+    if (!modelBlob) {
+      navigate('/onboarding');
+      return;
+    }
+
+    try {
+      const renderAtLoad = getSetting('render');
+      const showTexturesAtLoad = renderAtLoad.showTextures;
+      const result = await loadModel(ctx.scene, modelBlob, undefined, {
+        showTextures: showTexturesAtLoad,
+        sketchColor: renderAtLoad.sketchColor,
+        sketchSpecular: renderAtLoad.sketchSpecular,
+      });
+      if (aborted()) return;
+
+      ctx.camera.lowerRadiusLimit = result.diagonal * 0.27;
+      ctx.camera.upperRadiusLimit = result.diagonal * 5;
+      modelSizeRef.current = { x: result.size.x, z: result.size.z };
+      modelDiagonalRef.current = result.diagonal;
+
+      const savedPose = getSetting('controls').homeView;
+      const centerTarget = result.center.clone();
+      centerTarget.y = 0;
+      if (opts.useHomePose && savedPose) {
+        ctx.camera.target = new Vector3(savedPose.target.x, savedPose.target.y, savedPose.target.z);
+        ctx.camera.alpha = savedPose.alpha;
+        ctx.camera.beta = savedPose.beta;
+        ctx.camera.radius = savedPose.radius;
+      } else {
+        // Default / new-floor framing — top-down, centered on the model
+        ctx.camera.target = centerTarget.clone();
+        ctx.camera.alpha = Tools.ToRadians(270);
+        ctx.camera.beta = Tools.ToRadians(0.5);
+        ctx.camera.radius = computeIdealRadius();
+      }
+
+      createModelShadow(ctx.scene, result.center, result.size);
+      setDefaultTarget({ x: result.center.x, y: 0, z: result.center.z });
+
+      modelMeshesRef.current = result.meshes.filter((m) => m.getTotalVertices?.() > 0);
+      {
+        const w = getSetting('render').edgeWidth;
+        for (const mesh of modelMeshesRef.current) mesh.edgesWidth = w;
+      }
+      edgeOutlineRef.current = createEdgeOutline(ctx.scene, ctx.camera, {
+        meshes: modelMeshesRef.current,
+      });
+      if (getSetting('render').edgeMode === 'classic' || showTexturesAtLoad) {
+        edgeOutlineRef.current.setEnabled(false);
+      }
+
+      setModelStatus('ready');
+      setModelStatusColor('var(--green)');
+
+      // Track every imported mesh (incl. __root__) so the whole hierarchy is
+      // disposed on the next teardown — otherwise __root__ nodes accumulate.
+      importedMeshesRef.current = result.meshes;
+
+      // Shadow walls + covers → shadow casters, then the sun generator
+      const wallMeshes = createShadowWalls(ctx.scene, floorCfg.shadowWalls || []);
+      shadowWallMeshesRef.current = wallMeshes;
+      for (const cc of floorCfg.covers || []) {
+        coverMeshMapRef.current[cc.entityId] = createCoverMesh(ctx.scene, cc, cc.entityId);
+      }
+      const coverCasters = Object.values(coverMeshMapRef.current).flatMap((e) => [e.panel, e.housing]);
+      const allCasters = [...result.shadowCasters, ...wallMeshes, ...coverCasters];
+      shadowCastersRef.current = allCasters;
+
+      const sunShadowGen = setupSunShadows(ctx, allCasters, result.diagonal, getSetting('render').sunShadowRes);
+      sunShadowGenRef.current = sunShadowGen;
+
+      // Light meshes (shadow-casting PointLights, capped)
+      let shadowCount = 0;
+      for (const cfg of floorCfg.lights) {
+        const canShadow = shadowCount < MAX_POINT_SHADOWS;
+        const entry = createLightMesh(ctx.scene, cfg, cfg.entityId, {
+          withPointLight: true,
+          shadowCasters: canShadow ? result.shadowCasters : undefined,
+          shadowResolution: getSetting('render').pointShadowRes,
+        });
+        if (entry.shadowGen) shadowCount++;
+        meshMapRef.current[cfg.entityId] = entry;
+      }
+      ctx.scene.onAfterRenderObservable.addOnce(() => {
+        freezePointLightShadows(meshMapRef.current);
+      });
+
+      // Wall displays
+      for (const dc of floorCfg.displays || []) {
+        const entry = createDisplayMesh(ctx.scene, dc);
+        if (dc.clickable) {
+          entry.plane.isPickable = true;
+          entry.plane.metadata = { displayId: dc.id };
+        } else {
+          entry.plane.isPickable = false;
+        }
+        displayMeshMapRef.current[dc.id] = entry;
+      }
+
+      // Tubes
+      for (const tc of floorCfg.tubes || []) {
+        tubeMapRef.current[tc.id] = createTubeMeshes(ctx.scene, tc, ctx.glowLayer);
+      }
+
+      // Staircases (clickable floor navigation)
+      for (const sc of floorCfg.staircases || []) {
+        staircaseMapRef.current[sc.id] = createStaircaseMesh(ctx.scene, sc);
+      }
+
+      // Cameras (clickable dome cameras → HA feed)
+      for (const cam of floorCfg.cameras || []) {
+        cameraMeshMapRef.current[cam.id] = createCameraMesh(ctx.scene, cam);
+      }
+
+      // Weather: create once, re-point the cloud-shadow generator on later floors
+      if (!weatherRef.current) {
+        weatherRef.current = createWeatherEffects(ctx.scene, sunShadowGen ?? undefined);
+      } else {
+        weatherRef.current.setShadowGenerator(sunShadowGen ?? undefined);
+      }
+
+      if (opts.seedFromCache) seedFloorFromCache(floorCfg);
+    } catch (e) {
+      console.error('[Floor] Build error:', e);
+      setModelStatus('failed');
+      setModelStatusColor('var(--red)');
+    }
+  }, [resolveFloorModel, navigate, computeIdealRadius, seedFloorFromCache]);
+
+  /** Dispose the current floor's model + entities (keeps scene/camera/weather/HA alive). */
+  const teardownFloor = useCallback(() => {
+    const ctx = sceneCtxRef.current;
+    if (!ctx) return;
+    for (const entityId of Array.from(pendingRef.current.keys())) stopPendingFeedback(entityId);
+    Object.keys(meshMapRef.current).forEach((id) => removeLightMesh(meshMapRef.current, id));
+    Object.keys(displayMeshMapRef.current).forEach((id) => removeDisplayMesh(displayMeshMapRef.current, id));
+    Object.keys(coverMeshMapRef.current).forEach((id) => removeCoverMesh(ctx.scene, coverMeshMapRef.current, id));
+    disposeAllTubes(tubeMapRef.current);
+    Object.keys(staircaseMapRef.current).forEach((id) => removeStaircaseMesh(ctx.scene, staircaseMapRef.current, id));
+    Object.keys(cameraMeshMapRef.current).forEach((id) => removeCameraMesh(ctx.scene, cameraMeshMapRef.current, id));
+    for (const m of shadowWallMeshesRef.current) m.dispose();
+    shadowWallMeshesRef.current = [];
+    // Dispose the full imported hierarchy (incl. __root__), not just solids.
+    for (const m of importedMeshesRef.current) m.dispose();
+    importedMeshesRef.current = [];
+    modelMeshesRef.current = [];
+    edgeOutlineRef.current?.dispose();
+    edgeOutlineRef.current = null;
+    sunShadowGenRef.current?.dispose();
+    sunShadowGenRef.current = null;
+    disposeModelShadow();
+  }, [stopPendingFeedback]);
+
+  // ── Fade transition ────────────────────────────────────────────
+  const runFade = useCallback((visible: boolean): Promise<void> => {
+    return new Promise((resolve) => {
+      const el = fadeRef.current;
+      if (!el) { setFadeVisible(visible); resolve(); return; }
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        el.removeEventListener('transitionend', finish);
+        resolve();
+      };
+      el.addEventListener('transitionend', finish);
+      setTimeout(finish, 450); // fallback if transitionend doesn't fire (bg tab)
+      setFadeVisible(visible);
+    });
+  }, []);
+
+  const switchFloorRef = useRef<(id: string) => void>(() => {});
+  const switchFloor = useCallback(async (targetFloorId: string) => {
+    const config = configRef.current;
+    if (!config || switchingFloorRef.current) return;
+    if (targetFloorId === activeFloorIdRef.current) return;
+    const target = getFloors(config).find((f) => f.id === targetFloorId);
+    if (!target) return;
+
+    switchingFloorRef.current = true;
+    await runFade(true);              // fade to dark
+    teardownFloor();
+    activeFloorIdRef.current = targetFloorId;
+    config.activeFloorId = targetFloorId;
+    setActiveFloorId(targetFloorId);
+    if (!simulationMode) {
+      try { updateConfig({ activeFloorId: targetFloorId }); } catch (e) {
+        console.warn('[Floor] Failed to persist active floor:', e);
+      }
+    }
+    await buildFloor(target, { useHomePose: false, seedFromCache: true });
+    await runFade(false);             // fade back in
+    switchingFloorRef.current = false;
+  }, [runFade, teardownFloor, buildFloor, simulationMode]);
+  switchFloorRef.current = switchFloor;
+
   // Initialize everything
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -682,8 +971,6 @@ export default function Dashboard() {
     let weatherIntervalRef: ReturnType<typeof setInterval> | null = null;
     const ctx = createScene(canvas, { enableGlow: true });
     sceneCtxRef.current = ctx;
-    // TEMP: verification hook (remove before commit)
-    (window as unknown as Record<string, unknown>).__sceneCtx = ctx;
 
     let pressTimer: ReturnType<typeof setTimeout> | null = null;
     let pressedEntity: string | null = null;
@@ -716,181 +1003,66 @@ export default function Dashboard() {
       // HA settings now live exclusively in the settings store
       if (disposed) return;
 
-      // Load 3D model
-      let modelBlob: Blob | null;
-      if (simulationMode) {
+      // Resolve floors + the active floor, then build it. Legacy single-model
+      // configs synthesize one floor via getFloors, so behavior is unchanged.
+      const config = configRef.current!;
+      const floorList = getFloors(config);
+      const active = getActiveFloor(config);
+      activeFloorIdRef.current = active.id;
+      setFloors(floorList);
+      setActiveFloorId(active.id);
+
+      await buildFloor(active, { useHomePose: true, seedFromCache: false });
+      if (disposed) return;
+
+      // Weather polling (floor-independent — location is app-wide)
+      const pollWeather = async () => {
+        if (!weatherEnabledRef.current) return;
         try {
-          const resp = await fetch(SIMULATION_MODEL_URL);
-          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-          modelBlob = await resp.blob();
-        } catch (e) {
-          console.error('[Simulation] Failed to load model:', e);
-          setModelStatus('failed');
-          setModelStatusColor('var(--red)');
-          return;
+          const lat = configRef.current?.location.latitude ?? 43.6077;
+          const lng = configRef.current?.location.longitude ?? 3.8766;
+          const data = await fetchWeather(lat, lng);
+          if (disposed || !weatherRef.current) return;
+          setCurrentWeather(data);
+          const ccf = weatherRef.current.updateWeather(data);
+          cloudCoverFactorRef.current = ccf;
+          setCloudCoverFactor(ccf);
+        } catch (err) {
+          console.warn('[Weather] Poll failed:', err);
         }
-      } else {
-        modelBlob = await getModelBlob();
-      }
-      if (!modelBlob) {
-        navigate('/onboarding');
-        return;
-      }
-      try {
-        const renderAtLoad = getSetting('render');
-        const showTexturesAtLoad = renderAtLoad.showTextures;
-        const result = await loadModel(ctx.scene, modelBlob, undefined, {
-          showTextures: showTexturesAtLoad,
-          sketchColor: renderAtLoad.sketchColor,
-          sketchSpecular: renderAtLoad.sketchSpecular,
-        });
-        if (disposed) return;
-
-        ctx.camera.lowerRadiusLimit = result.diagonal * 0.27;
-        ctx.camera.upperRadiusLimit = result.diagonal * 5;
-
-        modelSizeRef.current = { x: result.size.x, z: result.size.z };
-        modelDiagonalRef.current = result.diagonal;
-
-        const savedPose = getSetting('controls').homeView;
-        if (savedPose) {
-          ctx.camera.target = new Vector3(savedPose.target.x, savedPose.target.y, savedPose.target.z);
-          ctx.camera.alpha = savedPose.alpha;
-          ctx.camera.beta = savedPose.beta;
-          ctx.camera.radius = savedPose.radius;
-        } else {
-          // Default: center at floor level, top-down view
-          const target = result.center.clone();
-          target.y = 0;
-          ctx.camera.target = target;
-          ctx.camera.alpha = Tools.ToRadians(270);
-          ctx.camera.beta = Tools.ToRadians(0.5);
-          ctx.camera.radius = computeIdealRadius();
-        }
-
-        createModelShadow(ctx.scene, result.center, result.size);
-
-        setDefaultTarget({ x: result.center.x, y: 0, z: result.center.z });
-
-        modelMeshesRef.current = result.meshes.filter(
-          (m) => m.getTotalVertices?.() > 0,
-        );
-
-        // Apply persisted edge width to model meshes (ModelLoader defaults to 3)
-        {
-          const w = getSetting('render').edgeWidth;
-          for (const mesh of modelMeshesRef.current) mesh.edgesWidth = w;
-        }
-
-        // Screen-space edge detection for inner corners (only on model meshes, not lights)
-        edgeOutlineRef.current = createEdgeOutline(ctx.scene, ctx.camera, {
-          meshes: modelMeshesRef.current,
-        });
-
-        // Disable post-process if edge mode is classic or textures are shown
-        if (getSetting('render').edgeMode === 'classic' || showTexturesAtLoad) {
-          edgeOutlineRef.current.setEnabled(false);
-        }
-
-        setModelStatus('ready');
-        setModelStatusColor('var(--green)');
-
-        // Create invisible shadow wall meshes from config
-        const wallMeshes = createShadowWalls(ctx.scene, configRef.current?.shadowWalls || []);
-
-        // Create roller shutter meshes — curtains join the sun shadow casters
-        // so a closed shutter actually blocks sunlight entering the room
-        for (const cc of configRef.current?.covers || []) {
-          coverMeshMapRef.current[cc.entityId] = createCoverMesh(ctx.scene, cc, cc.entityId);
-        }
-        const coverCasters = Object.values(coverMeshMapRef.current)
-          .flatMap((e) => [e.panel, e.housing]);
-
-        const allCasters = [...result.shadowCasters, ...wallMeshes, ...coverCasters];
-
-        shadowCastersRef.current = allCasters;
-
-        // Setup sun shadows with model geometry + shadow walls
-        const sunShadowGen = setupSunShadows(ctx, allCasters, result.diagonal, getSetting('render').sunShadowRes);
-
-        // Create light meshes with shadow-casting PointLights
-        // Cap point-light shadow generators to avoid VRAM exhaustion
-        // (each cube shadow map = 6 × 2048² ≈ 100 MB)
-        const MAX_POINT_SHADOWS = 6;
-        let shadowCount = 0;
-        const config = configRef.current!;
-        config.lights.forEach((cfg) => {
-          const canShadow = shadowCount < MAX_POINT_SHADOWS;
-          const entry = createLightMesh(ctx.scene, cfg, cfg.entityId, {
-            withPointLight: true,
-            shadowCasters: canShadow ? result.shadowCasters : undefined,
-            shadowResolution: getSetting('render').pointShadowRes,
-          });
-          if (entry.shadowGen) shadowCount++;
-          meshMapRef.current[cfg.entityId] = entry;
-        });
-
-        // Freeze PointLight shadow maps after first render (static geometry)
-        ctx.scene.onAfterRenderObservable.addOnce(() => {
-          freezePointLightShadows(meshMapRef.current);
-        });
-
-        // Create wall display meshes
-        const displayConfigs = config.displays || [];
-        for (const dc of displayConfigs) {
-          const entry = createDisplayMesh(ctx.scene, dc);
-          if (dc.clickable) {
-            entry.plane.isPickable = true;
-            entry.plane.metadata = { displayId: dc.id };
-          } else {
-            entry.plane.isPickable = false;
-          }
-          displayMeshMapRef.current[dc.id] = entry;
-        }
-
-        // Create tube meshes
-        const tubeConfigs = config.tubes || [];
-        for (const tc of tubeConfigs) {
-          tubeMapRef.current[tc.id] = createTubeMeshes(ctx.scene, tc, ctx.glowLayer);
-        }
-
-        // Weather effects (rain/snow particles + cloud cover)
-        weatherRef.current = createWeatherEffects(ctx.scene, sunShadowGen ?? undefined);
-        const pollWeather = async () => {
-          if (!weatherEnabledRef.current) return;
-          try {
-            const lat = configRef.current?.location.latitude ?? 43.6077;
-            const lng = configRef.current?.location.longitude ?? 3.8766;
-            const data = await fetchWeather(lat, lng);
-            if (disposed || !weatherRef.current) return;
-            setCurrentWeather(data);
-            const ccf = weatherRef.current.updateWeather(data);
-            cloudCoverFactorRef.current = ccf;
-            setCloudCoverFactor(ccf);
-          } catch (err) {
-            console.warn('[Weather] Poll failed:', err);
-          }
-        };
-        pollWeatherRef.current = pollWeather;
-        pollWeather();
-        const weatherInterval = setInterval(pollWeather, 600_000);
-        weatherIntervalRef = weatherInterval;
-      } catch (e) {
-        console.error('[Model] Load error:', e);
-        setModelStatus('failed');
-        setModelStatusColor('var(--red)');
-        return;
-      }
+      };
+      pollWeatherRef.current = pollWeather;
+      pollWeather();
+      weatherIntervalRef = setInterval(pollWeather, 600_000);
 
       // Pointer handlers: short click = toggle, long press = modal
-      // Also handles clickable display meshes (displayId metadata) and tube meshes (tubeId metadata).
+      // Also handles clickable display meshes (displayId metadata), tube meshes
+      // (tubeId metadata) and staircases (staircaseId metadata → floor switch).
       let pressedDisplayId: string | null = null;
       let pressedTubeId: string | null = null;
+      let pressedStaircaseId: string | null = null;
+      let pressedCameraId: string | null = null;
 
       ctx.scene.onPointerDown = (evt, pickResult) => {
         if (evt.button > 0) return;
         if (!pickResult.hit || !pickResult.pickedMesh) return;
-        const meta = pickResult.pickedMesh.metadata as { entityId?: string; displayId?: string; tubeId?: string } | null;
+        const meta = pickResult.pickedMesh.metadata as { entityId?: string; displayId?: string; tubeId?: string; staircaseId?: string; cameraId?: string } | null;
+
+        // Staircase click — immediate floor switch, no long-press
+        if (meta?.staircaseId) {
+          pressedStaircaseId = meta.staircaseId;
+          pressStartX = evt.clientX;
+          pressStartY = evt.clientY;
+          return;
+        }
+
+        // Camera click — immediate feed open, no long-press
+        if (meta?.cameraId) {
+          pressedCameraId = meta.cameraId;
+          pressStartX = evt.clientX;
+          pressStartY = evt.clientY;
+          return;
+        }
 
         // Display click — immediate open, no long-press
         if (meta?.displayId) {
@@ -920,6 +1092,29 @@ export default function Dashboard() {
       };
 
       ctx.scene.onPointerUp = (_evt) => {
+        // Handle staircase tap → switch floor
+        if (pressedStaircaseId) {
+          const dx = _evt.clientX - pressStartX;
+          const dy = _evt.clientY - pressStartY;
+          if (dx * dx + dy * dy <= MOVE_THRESHOLD * MOVE_THRESHOLD) {
+            const entry = staircaseMapRef.current[pressedStaircaseId];
+            if (entry) switchFloorRef.current(entry.config.targetFloorId);
+          }
+          pressedStaircaseId = null;
+          return;
+        }
+
+        // Handle camera tap → open feed
+        if (pressedCameraId) {
+          const dx = _evt.clientX - pressStartX;
+          const dy = _evt.clientY - pressStartY;
+          if (dx * dx + dy * dy <= MOVE_THRESHOLD * MOVE_THRESHOLD) {
+            openCameraModal(pressedCameraId);
+          }
+          pressedCameraId = null;
+          return;
+        }
+
         // Handle display tap
         if (pressedDisplayId) {
           const dx = _evt.clientX - pressStartX;
@@ -947,7 +1142,7 @@ export default function Dashboard() {
           pressTimer = null;
           if (pressedEntity && haRef.current) {
             const tappedEntity = pressedEntity;
-            const lightCfg = configRef.current?.lights.find((l) => l.entityId === tappedEntity);
+            const lightCfg = configRef.current ? findLightConfig(configRef.current, tappedEntity) : undefined;
             const doubleTapId = lightCfg?.doubleTapEntityId;
 
             if (doubleTapId && lastTapEntity === tappedEntity && singleTapTimer !== null) {
@@ -984,6 +1179,20 @@ export default function Dashboard() {
       };
 
       ctx.scene.onPointerMove = (_evt, pickResult) => {
+        if (pressedStaircaseId) {
+          const dx = _evt.clientX - pressStartX;
+          const dy = _evt.clientY - pressStartY;
+          if (dx * dx + dy * dy > MOVE_THRESHOLD * MOVE_THRESHOLD) {
+            pressedStaircaseId = null;
+          }
+        }
+        if (pressedCameraId) {
+          const dx = _evt.clientX - pressStartX;
+          const dy = _evt.clientY - pressStartY;
+          if (dx * dx + dy * dy > MOVE_THRESHOLD * MOVE_THRESHOLD) {
+            pressedCameraId = null;
+          }
+        }
         if (pressedDisplayId) {
           const dx = _evt.clientX - pressStartX;
           const dy = _evt.clientY - pressStartY;
@@ -1007,8 +1216,8 @@ export default function Dashboard() {
             pressedEntity = null;
           }
         }
-        const meshMeta = pickResult.pickedMesh?.metadata as { entityId?: string; displayId?: string; tubeId?: string } | null;
-        if (pickResult.hit && (meshMeta?.entityId || meshMeta?.displayId || meshMeta?.tubeId)) {
+        const meshMeta = pickResult.pickedMesh?.metadata as { entityId?: string; displayId?: string; tubeId?: string; staircaseId?: string; cameraId?: string } | null;
+        if (pickResult.hit && (meshMeta?.entityId || meshMeta?.displayId || meshMeta?.tubeId || meshMeta?.staircaseId || meshMeta?.cameraId)) {
           canvas!.style.cursor = 'pointer';
         } else {
           canvas!.style.cursor = 'default';
@@ -1022,20 +1231,10 @@ export default function Dashboard() {
 
     return () => {
       disposed = true;
+      buildTokenRef.current++; // abort any in-flight floor build
       if (singleTapTimer !== null) clearTimeout(singleTapTimer);
-      // Clear all pending highlights
-      for (const entityId of pendingRef.current.keys()) stopPendingFeedback(entityId);
-      Object.keys(meshMapRef.current).forEach((id) =>
-        removeLightMesh(meshMapRef.current, id),
-      );
-      Object.keys(displayMeshMapRef.current).forEach((id) =>
-        removeDisplayMesh(displayMeshMapRef.current, id),
-      );
-      Object.keys(coverMeshMapRef.current).forEach((id) =>
-        removeCoverMesh(ctx.scene, coverMeshMapRef.current, id),
-      );
-      disposeAllTubes(tubeMapRef.current);
       if (weatherIntervalRef) clearInterval(weatherIntervalRef);
+      teardownFloor();
       weatherRef.current?.dispose();
       weatherRef.current = null;
       disposeGroundGrid();
@@ -1057,9 +1256,13 @@ export default function Dashboard() {
     const config = configRef.current;
     if (!config) return;
 
+    // Subscribe to the UNION of every floor's entities so state survives floor
+    // switches (only the active floor has meshes; inactive states are cached).
+    const allEntities = collectAllEntityIds(config);
+
     // Build lookup: modeEntityId → light entityId (for remote lights)
     const modeSensorToLight: Record<string, string> = {};
-    for (const l of config.lights) {
+    for (const l of allEntities.lights) {
       if (l.type === 'remote' && l.modeEntityId) {
         modeSensorToLight[l.modeEntityId] = l.entityId;
       }
@@ -1072,6 +1275,7 @@ export default function Dashboard() {
         if (meshMapRef.current[entityId]) applyLightState(entityId, state);
         if (coverMeshMapRef.current[entityId]) applyCoverState(entityId, state);
         if (entityId === coverModalEntityIdRef.current) setCoverModalState(state);
+        if (entityId === cameraModalEntityIdRef.current) setCameraModalState(state);
         if (entityId === modalEntityIdRef.current) setModalState(state);
         if (entityId === modalDoubleTapEntityIdRef.current) setModalDoubleTapState(state);
         if (entityId === remoteModalEntityIdRef.current) setRemoteModalState(state);
@@ -1156,19 +1360,19 @@ export default function Dashboard() {
         if (c.type !== 'script') sensorIds.push(c.entityId);
         if (c.type === 'indicator' && c.climateEntityId) sensorIds.push(c.climateEntityId);
       }
-      // Include display source entity IDs in demo mode
-      for (const d of config.displays ?? []) {
+      // Include display source entity IDs (union across floors) in demo mode
+      for (const d of allEntities.displays) {
         for (const s of d.sources) {
           if (!sensorIds.includes(s.entityId)) sensorIds.push(s.entityId);
         }
       }
-      // Include tube sensor entity IDs in demo mode
-      for (const t of config.tubes ?? []) {
+      // Include tube sensor entity IDs (union across floors) in demo mode
+      for (const t of allEntities.tubes) {
         for (const line of t.lines) {
           if (!sensorIds.includes(line.sensorId)) sensorIds.push(line.sensorId);
         }
       }
-      demo.start(config.lights, sensorIds, config.covers ?? []);
+      demo.start(allEntities.lights, sensorIds, allEntities.covers);
     } else {
       const haSettings = getSetting('connection').haSettings;
       const ha = new HAConnection(
@@ -1206,12 +1410,14 @@ export default function Dashboard() {
   remoteModalEntityIdRef.current = remoteModalEntityId;
   const coverModalEntityIdRef = useRef<string | null>(null);
   coverModalEntityIdRef.current = coverModalEntityId;
+  const cameraModalEntityIdRef = useRef<string | null>(null);
+  cameraModalEntityIdRef.current = cameraModalConfig?.entityId ?? null;
 
   const openModal = useCallback((entityId: string) => {
     const config = configRef.current;
     if (!config) return;
 
-    const coverCfg = config.covers?.find((c) => c.entityId === entityId);
+    const coverCfg = findCoverConfig(config, entityId);
     if (coverCfg) {
       setCoverModalEntityId(entityId);
       setCoverModalLabel(coverCfg.label || entityId.split('.')[1].replace(/_/g, ' '));
@@ -1220,7 +1426,7 @@ export default function Dashboard() {
       return;
     }
 
-    const cfg = config.lights.find((l) => l.entityId === entityId);
+    const cfg = findLightConfig(config, entityId);
     if (!cfg) return;
 
     const lbl = cfg.label || entityId.split('.')[1].replace(/_/g, ' ');
@@ -1251,7 +1457,7 @@ export default function Dashboard() {
   const openDisplayModal = useCallback((displayId: string) => {
     const config = configRef.current;
     if (!config) return;
-    const dc = config.displays?.find((d) => d.id === displayId);
+    const dc = findDisplayConfig(config, displayId);
     if (!dc) return;
     setDisplayModalConfig(dc);
     setDisplayModalStates({ ...lastStatesRef.current });
@@ -1261,7 +1467,7 @@ export default function Dashboard() {
   const openTubeModal = useCallback((tubeId: string) => {
     const config = configRef.current;
     if (!config) return;
-    const tc = config.tubes?.find((t) => t.id === tubeId);
+    const tc = findTubeConfig(config, tubeId);
     if (!tc) return;
     // Synthesize a DisplayConfig so we can reuse DisplayModal for sensor graphs
     const syntheticDisplay: DisplayConfig = {
@@ -1284,6 +1490,22 @@ export default function Dashboard() {
   const handleDisplayModalClose = useCallback(() => {
     setDisplayModalVisible(false);
     setDisplayModalConfig(null);
+  }, []);
+
+  const openCameraModal = useCallback((cameraId: string) => {
+    const config = configRef.current;
+    if (!config) return;
+    const cam = findCameraConfig(config, cameraId);
+    if (!cam) return;
+    setCameraModalConfig(cam);
+    setCameraModalState(lastStatesRef.current[cam.entityId] || null);
+    setCameraModalVisible(true);
+  }, []);
+
+  const handleCameraModalClose = useCallback(() => {
+    setCameraModalVisible(false);
+    setCameraModalConfig(null);
+    setCameraModalState(null);
   }, []);
 
   const handleRemoteModalClose = useCallback(() => {
@@ -1375,10 +1597,10 @@ export default function Dashboard() {
       removeLightMesh(meshMapRef.current, id),
     );
 
-    // Recreate with new strip config (cap shadows like initial creation)
+    // Recreate the active floor's lights with the new strip config
     const MAX_POINT_SHADOWS = 4;
     let shadowCount = 0;
-    config.lights.forEach((cfg) => {
+    getActiveFloor(config).lights.forEach((cfg) => {
       const canShadow = shadowCount < MAX_POINT_SHADOWS;
       const entry = createLightMesh(ctx.scene, cfg, cfg.entityId, {
         withPointLight: true,
@@ -1492,8 +1714,9 @@ export default function Dashboard() {
         else if (settingsOpen) setSettingsOpen(false);
         else if (remoteModalVisible) handleRemoteModalClose();
         else if (coverModalVisible) handleCoverModalClose();
+        else if (cameraModalVisible) handleCameraModalClose();
         else handleModalClose();
-      } else if (e.key === ' ' && !settingsOpen && !modalVisible && !remoteModalVisible && !coverModalVisible) {
+      } else if (e.key === ' ' && !settingsOpen && !modalVisible && !remoteModalVisible && !coverModalVisible && !cameraModalVisible) {
         e.preventDefault();
         if (homeViewSetting) saveHomeView();
         else resetView();
@@ -1509,7 +1732,7 @@ export default function Dashboard() {
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [handleModalClose, handleRemoteModalClose, handleCoverModalClose, settingsOpen, modalVisible, remoteModalVisible, coverModalVisible, resetView, navigate, homeViewSetting, saveHomeView]);
+  }, [handleModalClose, handleRemoteModalClose, handleCoverModalClose, handleCameraModalClose, settingsOpen, modalVisible, remoteModalVisible, coverModalVisible, cameraModalVisible, resetView, navigate, homeViewSetting, saveHomeView]);
 
   // 3-finger touch to reset view (mobile)
   useEffect(() => {
@@ -1687,6 +1910,21 @@ export default function Dashboard() {
       <div className="dashboard">
         <canvas ref={canvasRef} />
 
+        {floors.length > 1 && activeFloorId && (
+          <div className="floor-badge">
+            {floors.find((f) => f.id === activeFloorId)?.name ?? ''}
+          </div>
+        )}
+
+        <div
+          ref={fadeRef}
+          className={`floor-fade${fadeVisible ? ' visible' : ''}`}
+          style={{
+            background: getSetting('appearance').bgColor
+              || (theme === 'light' ? '#f0f2f5' : '#0a0e1a'),
+          }}
+        />
+
         <HUD
           latitude={configRef.current?.location.latitude ?? 43.6077}
           longitude={configRef.current?.location.longitude ?? 3.8766}
@@ -1743,6 +1981,14 @@ export default function Dashboard() {
           onCloseCover={handleCloseCover}
           onStopCover={handleStopCover}
           onSetPosition={handleSetCoverPosition}
+        />
+
+        <CameraModal
+          visible={cameraModalVisible}
+          camera={cameraModalConfig}
+          state={cameraModalState}
+          demo={simulationMode || demoMode}
+          onClose={handleCameraModalClose}
         />
 
         <RemoteModal

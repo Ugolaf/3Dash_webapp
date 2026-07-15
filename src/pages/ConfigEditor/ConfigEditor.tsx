@@ -14,13 +14,14 @@ import {
   EasingFunction,
   Tools,
   type Mesh,
+  type AbstractMesh,
   type LinesMesh,
   type Observer,
   type Scene,
 } from '@babylonjs/core';
 import { createScene, type SceneContext } from '../../babylon/SceneManager';
 import { loadModel } from '../../babylon/ModelLoader';
-import { createEdgeOutline } from '../../babylon/EdgeOutline';
+import { createEdgeOutline, type EdgeOutlineControls } from '../../babylon/EdgeOutline';
 import { removeLightMesh, rebuildAllMeshes, type MeshMap } from '../../babylon/LightMeshFactory';
 import {
   createDisplayMesh,
@@ -30,7 +31,7 @@ import {
   buildMockupStates,
   type DisplayMeshMap,
 } from '../../babylon/DisplayMeshFactory';
-import { getConfig, updateConfig, getModelBlob } from '../../services/configApi';
+import { getConfig, updateConfig, getModelBlob, uploadModel, deleteModelBlob } from '../../services/configApi';
 import { getSetting } from '../../services/settingsStore';
 import { getEntityCache, setEntityCache } from '../../services/entityCache';
 import { HAConnection } from '../../services/haWebSocket';
@@ -43,6 +44,16 @@ import ShadowWallList from '../../components/ShadowWallList';
 import ShadowWallForm, { type WallPreviewInfo } from '../../components/ShadowWallForm';
 import CoverList from '../../components/CoverList';
 import CoverForm, { type CoverPreviewInfo } from '../../components/CoverForm';
+import StaircaseList from '../../components/StaircaseList';
+import StaircaseForm, { type StaircasePreviewInfo } from '../../components/StaircaseForm';
+import CameraList from '../../components/CameraList';
+import CameraForm, { type CameraOrientation } from '../../components/CameraForm';
+import {
+  createCameraMesh,
+  removeCameraMesh,
+  rebuildAllCameraMeshes,
+  type CameraMeshMap,
+} from '../../babylon/CameraMeshFactory';
 import {
   createCoverMesh,
   removeCoverMesh,
@@ -50,13 +61,21 @@ import {
   setCoverPosition,
   type CoverMeshMap,
 } from '../../babylon/CoverMeshFactory';
+import {
+  createStaircaseMesh,
+  removeStaircaseMesh,
+  rebuildAllStaircaseMeshes,
+  type StaircaseMeshMap,
+} from '../../babylon/StaircaseMeshFactory';
+import { getActiveFloor, getFloors } from '../../utils/floors';
+import { patchFloor, createEmptyFloor, floorNameMap } from './floorHelpers';
 import { arrayMove } from '@dnd-kit/sortable';
 import TubeList from '../../components/TubeList';
 import TubeForm, { type TubePreviewInfo } from '../../components/TubeForm';
 import { createTubeMeshes, removeTubeMeshes, disposeAllTubes, renderMockupLabels, type TubeMap } from '../../babylon/TubeMeshFactory';
 import GuidedTour from '../../components/GuidedTour/GuidedTour';
 import { editorTourSteps } from '../../components/GuidedTour/tourSteps';
-import type { LightConfig, LightGroup, DisplayConfig, ShadowWallConfig, CoverConfig, TubeConfig, LightPosition, HAState } from '../../types';
+import type { LightConfig, LightGroup, DisplayConfig, ShadowWallConfig, CoverConfig, TubeConfig, StaircaseConfig, CameraConfig, FloorConfig, AppConfig, LightPosition, HAState } from '../../types';
 import './ConfigEditor.css';
 
 export default function ConfigEditor() {
@@ -67,6 +86,10 @@ export default function ConfigEditor() {
   const sceneCtxRef = useRef<SceneContext | null>(null);
   const homingRef = useRef(false);
   const homeTargetRef = useRef<Vector3 | null>(null);
+  /** All meshes imported by the current floor's model (disposed on floor switch). */
+  const editorModelMeshesRef = useRef<AbstractMesh[]>([]);
+  const editorEdgeRef = useRef<EdgeOutlineControls | null>(null);
+  const floorFileRef = useRef<HTMLInputElement>(null);
   const modelSizeRef = useRef<{ x: number; z: number } | null>(null);
   const modelDiagonalRef = useRef(1);
   const meshMapRef = useRef<MeshMap>({});
@@ -95,7 +118,16 @@ export default function ConfigEditor() {
   const [toastVisible, setToastVisible] = useState(false);
 
   // Editor mode: lights, displays, covers, walls, or tubes
-  const [editorMode, setEditorMode] = useState<'lights' | 'displays' | 'covers' | 'walls' | 'tubes'>('lights');
+  const [editorMode, setEditorMode] = useState<'lights' | 'displays' | 'covers' | 'walls' | 'tubes' | 'stairs' | 'cameras'>('lights');
+
+  // Full config + multi-floor editing state
+  const configRef = useRef<AppConfig | null>(null);
+  const [floors, setFloors] = useState<FloorConfig[]>([]);
+  const [editFloorId, setEditFloorId] = useState<string>('');
+  const editFloorIdRef = useRef<string>('');
+  editFloorIdRef.current = editFloorId;
+  const floorsRef = useRef<FloorConfig[]>([]);
+  floorsRef.current = floors;
 
   // Load HA entity list for autocomplete in forms (cache-first, else fetch fresh).
   useEffect(() => {
@@ -173,6 +205,32 @@ export default function ConfigEditor() {
   const tubesRef = useRef(tubes);
   tubesRef.current = tubes;
   const tubePreviewInfoRef = useRef<TubePreviewInfo | null>(null);
+
+  // Staircase editor state
+  const staircaseMeshMapRef = useRef<StaircaseMeshMap>({});
+  const [staircases, setStaircases] = useState<StaircaseConfig[]>([]);
+  const [staircaseEditIdx, setStaircaseEditIdx] = useState<number | null>(null);
+  const [staircasePanelOpen, setStaircasePanelOpen] = useState(false);
+  const staircasePanelOpenRef = useRef(staircasePanelOpen);
+  staircasePanelOpenRef.current = staircasePanelOpen;
+  const staircasesRef = useRef(staircases);
+  staircasesRef.current = staircases;
+  const staircasePreviewInfoRef = useRef<StaircasePreviewInfo>({ style: 'up', rotationY: 0 });
+  const staircasePreviewIdRef = useRef<string | null>(null);
+
+  // Camera editor state
+  const cameraMeshMapRef = useRef<CameraMeshMap>({});
+  const [cameras, setCameras] = useState<CameraConfig[]>([]);
+  const [cameraEditIdx, setCameraEditIdx] = useState<number | null>(null);
+  const [cameraPanelOpen, setCameraPanelOpen] = useState(false);
+  const cameraPanelOpenRef = useRef(cameraPanelOpen);
+  cameraPanelOpenRef.current = cameraPanelOpen;
+  const camerasRef = useRef(cameras);
+  camerasRef.current = cameras;
+  const [cameraOrient, setCameraOrient] = useState<CameraOrientation>({ rotationY: 0, tilt: 0 });
+  const cameraOrientRef = useRef(cameraOrient);
+  cameraOrientRef.current = cameraOrient;
+  const cameraPreviewIdRef = useRef<string | null>(null);
 
   // Current preview shape/size from LightForm
   const previewInfoRef = useRef<PreviewInfo>({ shape: 'sphere', size: { diameter: 0.25 } });
@@ -483,6 +541,108 @@ export default function ConfigEditor() {
     return Math.max(radiusForHeight, radiusForWidth);
   }, []);
 
+  // ── Multi-floor editing ────────────────────────────────────────
+
+  /** Persist a partial update to the floor currently being edited. */
+  const persistActiveFloor = useCallback((patch: Partial<FloorConfig>) => {
+    const config = configRef.current;
+    if (!config) return;
+    const updated = patchFloor(getFloors(config), editFloorIdRef.current, patch);
+    configRef.current = { ...config, floors: updated };
+    setFloors(updated);
+    try { updateConfig({ floors: updated }); } catch (e) {
+      console.warn('[Config] Failed to persist floor:', e);
+    }
+  }, []);
+
+  /**
+   * Dispose the current floor's editor meshes, load a floor's model + entities
+   * into the scene and mirror them into the editor state. Used on init and on
+   * every floor switch (keeps the two paths in sync — one source of truth).
+   */
+  const loadFloorIntoEditor = useCallback(async (floorCfg: FloorConfig) => {
+    const ctx = sceneCtxRef.current;
+    if (!ctx) return;
+
+    // Dispose the previous floor
+    Object.keys(meshMapRef.current).forEach((id) => removeLightMesh(meshMapRef.current, id));
+    Object.keys(displayMeshMapRef.current).forEach((id) => removeDisplayMesh(displayMeshMapRef.current, id));
+    Object.keys(coverMeshMapRef.current).forEach((id) => removeCoverMesh(ctx.scene, coverMeshMapRef.current, id));
+    disposeAllTubes(tubeMeshMapRef.current);
+    Object.keys(staircaseMeshMapRef.current).forEach((id) => removeStaircaseMesh(ctx.scene, staircaseMeshMapRef.current, id));
+    Object.keys(cameraMeshMapRef.current).forEach((id) => removeCameraMesh(ctx.scene, cameraMeshMapRef.current, id));
+    for (const m of editorModelMeshesRef.current) m.dispose();
+    editorModelMeshesRef.current = [];
+    editorEdgeRef.current?.dispose();
+    editorEdgeRef.current = null;
+
+    // Mirror the floor's entities into editor state
+    setLights(floorCfg.lights || []); lightsRef.current = floorCfg.lights || [];
+    setLightGroups(floorCfg.lightGroups || []);
+    setDisplays(floorCfg.displays || []); displaysRef.current = floorCfg.displays || [];
+    setShadowWalls(floorCfg.shadowWalls || []); shadowWallsRef.current = floorCfg.shadowWalls || [];
+    setCovers(floorCfg.covers || []); coversRef.current = floorCfg.covers || [];
+    setTubes(floorCfg.tubes || []); tubesRef.current = floorCfg.tubes || [];
+    setStaircases(floorCfg.staircases || []); staircasesRef.current = floorCfg.staircases || [];
+    setCameras(floorCfg.cameras || []); camerasRef.current = floorCfg.cameras || [];
+
+    // Load the floor's model
+    const modelBlob = await getModelBlob(floorCfg.modelId);
+    if (!modelBlob) {
+      showToast(`Floor "${floorCfg.name}" has no model yet — upload one`);
+      return;
+    }
+    const result = await loadModel(ctx.scene, modelBlob);
+    editorModelMeshesRef.current = result.meshes;
+    const modelMeshes = result.meshes.filter((m) => m.getTotalVertices?.() > 0);
+    editorEdgeRef.current = createEdgeOutline(ctx.scene, ctx.camera, { meshes: modelMeshes });
+
+    const target = result.center.clone();
+    target.y = 0;
+    homeTargetRef.current = target.clone();
+    ctx.camera.target = target;
+    ctx.camera.alpha = Tools.ToRadians(270);
+    ctx.camera.beta = Tools.ToRadians(0.5);
+    ctx.camera.lowerRadiusLimit = result.diagonal * 0.27;
+    ctx.camera.upperRadiusLimit = result.diagonal * 3;
+    modelSizeRef.current = { x: result.size.x, z: result.size.z };
+    modelDiagonalRef.current = result.diagonal;
+    ctx.camera.radius = computeIdealRadius();
+
+    // Rebuild entity editor meshes
+    rebuildAllMeshes(ctx.scene, meshMapRef.current, floorCfg.lights || []);
+    rebuildAllDisplayMeshes(ctx.scene, displayMeshMapRef.current, floorCfg.displays || []);
+    for (const entry of Object.values(displayMeshMapRef.current)) {
+      entry.plane.isPickable = true;
+      updateDisplayTexture(entry, buildMockupStates(floorCfg.displays || []));
+    }
+    rebuildAllCoverMeshes(ctx.scene, coverMeshMapRef.current, floorCfg.covers || [], EDITOR_COVER_POSITION);
+    for (const tc of (floorCfg.tubes || [])) {
+      tubeMeshMapRef.current[tc.id] = createTubeMeshes(ctx.scene, tc, null);
+    }
+    renderMockupLabels(tubeMeshMapRef.current);
+    rebuildAllStaircaseMeshes(ctx.scene, staircaseMeshMapRef.current, floorCfg.staircases || []);
+    rebuildAllCameraMeshes(ctx.scene, cameraMeshMapRef.current, floorCfg.cameras || []);
+  }, [computeIdealRadius, showToast]);
+
+  /** Switch which floor is being edited (persists nothing — edits auto-save). */
+  const switchEditFloor = useCallback(async (floorId: string) => {
+    const config = configRef.current;
+    if (!config || floorId === editFloorIdRef.current) return;
+    const target = getFloors(config).find((f) => f.id === floorId);
+    if (!target) return;
+    // Close any open editor panels
+    clearPreview();
+    exitPlacingMode();
+    setPanelOpen(false); setDisplayPanelOpen(false); setCoverPanelOpen(false);
+    setWallPanelOpen(false); setTubePanelOpen(false); setStaircasePanelOpen(false); setCameraPanelOpen(false);
+    setEditIdx(null); setDisplayEditIdx(null); setCoverEditIdx(null);
+    setWallEditIdx(null); setTubeEditIdx(null); setStaircaseEditIdx(null); setCameraEditIdx(null);
+    setEditFloorId(floorId);
+    editFloorIdRef.current = floorId;
+    await loadFloorIntoEditor(target);
+  }, [clearPreview, exitPlacingMode, loadFloorIntoEditor]);
+
   // Initialize scene
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -493,65 +653,24 @@ export default function ConfigEditor() {
     sceneCtxRef.current = ctx;
 
     async function init() {
-      // Load config
       try {
         const config = await getConfig();
         if (disposed) return;
-        setLights(config.lights || []);
-        lightsRef.current = config.lights || [];
-        setLightGroups(config.lightGroups || []);
-        setDisplays(config.displays || []);
-        displaysRef.current = config.displays || [];
-        setShadowWalls(config.shadowWalls || []);
-        shadowWallsRef.current = config.shadowWalls || [];
-        setCovers(config.covers || []);
-        coversRef.current = config.covers || [];
-        setTubes(config.tubes || []);
-        tubesRef.current = config.tubes || [];
+        configRef.current = config;
+        const floorList = getFloors(config);
+        const active = getActiveFloor(config);
+        setFloors(floorList);
+        setEditFloorId(active.id);
+        editFloorIdRef.current = active.id;
 
-        // Load model from IndexedDB
-        const modelBlob = await getModelBlob();
+        // Editor needs at least one model — if the active floor has none, bail.
+        const modelBlob = await getModelBlob(active.modelId);
+        if (disposed) return;
         if (!modelBlob) {
           navigate('/onboarding');
           return;
         }
-        const result = await loadModel(ctx.scene, modelBlob);
-        if (disposed) return;
-
-        const modelMeshes = result.meshes.filter((m) => m.getTotalVertices?.() > 0);
-        createEdgeOutline(ctx.scene, ctx.camera, { meshes: modelMeshes });
-
-        const target = result.center.clone();
-        target.y = 0;
-        homeTargetRef.current = target.clone();
-        ctx.camera.target = target;
-        ctx.camera.alpha = Tools.ToRadians(270);
-        ctx.camera.beta = Tools.ToRadians(0.5);
-        ctx.camera.lowerRadiusLimit = result.diagonal * 0.27;
-        ctx.camera.upperRadiusLimit = result.diagonal * 3;
-
-        modelSizeRef.current = { x: result.size.x, z: result.size.z };
-        modelDiagonalRef.current = result.diagonal;
-        ctx.camera.radius = computeIdealRadius();
-
-        // Build light meshes
-        rebuildAllMeshes(ctx.scene, meshMapRef.current, config.lights || []);
-
-        // Build display meshes (editor-only preview — no live HA data, show placeholder)
-        rebuildAllDisplayMeshes(ctx.scene, displayMeshMapRef.current, config.displays || []);
-        for (const entry of Object.values(displayMeshMapRef.current)) {
-          entry.plane.isPickable = true;
-          updateDisplayTexture(entry, buildMockupStates(displaysRef.current));
-        }
-
-        // Build cover meshes (partially closed so the curtains are visible)
-        rebuildAllCoverMeshes(ctx.scene, coverMeshMapRef.current, config.covers || [], EDITOR_COVER_POSITION);
-
-        // Build tube meshes (editor preview — no live data, show mockup values)
-        for (const tc of (config.tubes || [])) {
-          tubeMeshMapRef.current[tc.id] = createTubeMeshes(ctx.scene, tc, null);
-        }
-        renderMockupLabels(tubeMeshMapRef.current);
+        await loadFloorIntoEditor(active);
       } catch (e) {
         if (!disposed) console.warn('[Editor] Init error:', e);
       }
@@ -625,8 +744,29 @@ export default function ConfigEditor() {
           };
           setPosition(newPos);
           positionRef.current = newPos;
-        } else if (wallPanelOpenRef.current) {
-          // Wall placing mode: exact position, no offset
+        } else if (cameraPanelOpenRef.current) {
+          // Camera placing mode: auto-orient from the clicked surface normal
+          // (ceiling → dome down, wall → dome horizontal facing into the room).
+          const faceNormal = placePick.getNormal(true, true);
+          if (faceNormal) {
+            // Interior face normals point into the room → the dome looks that way.
+            // Matches CameraMeshFactory: dome dir = (−sinθ·sinφ, −cosθ, −sinθ·cosφ).
+            const look = faceNormal.normalize();
+            const tilt = Math.acos(Math.min(Math.max(-look.y, -1), 1));
+            const yaw = Math.atan2(-look.x, -look.z);
+            const orient = { rotationY: parseFloat(yaw.toFixed(4)), tilt: parseFloat(tilt.toFixed(4)) };
+            setCameraOrient(orient);
+            cameraOrientRef.current = orient;
+          }
+          const newPos: LightPosition = {
+            x: parseFloat(p.x.toFixed(3)),
+            y: parseFloat(p.y.toFixed(3)),
+            z: parseFloat(p.z.toFixed(3)),
+          };
+          setPosition(newPos);
+          positionRef.current = newPos;
+        } else if (wallPanelOpenRef.current || staircasePanelOpenRef.current) {
+          // Wall / staircase placing mode: exact position, no offset
           const newPos: LightPosition = {
             x: parseFloat(p.x.toFixed(3)),
             y: parseFloat(p.y.toFixed(3)),
@@ -693,8 +833,8 @@ export default function ConfigEditor() {
         }
         return;
       }
-      // Skip click-to-edit when already editing a display, cover, wall, or tube
-      if (displayPanelOpenRef.current || coverPanelOpenRef.current || wallPanelOpenRef.current || tubePanelOpenRef.current) return;
+      // Skip click-to-edit when already editing another entity
+      if (displayPanelOpenRef.current || coverPanelOpenRef.current || wallPanelOpenRef.current || tubePanelOpenRef.current || staircasePanelOpenRef.current || cameraPanelOpenRef.current) return;
 
       // Pick under pointer
       const pick = ctx.scene.pick(evt.offsetX, evt.offsetY);
@@ -731,6 +871,24 @@ export default function ConfigEditor() {
           handleEditTubeRef.current(idx);
         }
       }
+
+      // Click on a staircase to edit it
+      if (pick.pickedMesh?.metadata?.staircaseId) {
+        const clickedId = pick.pickedMesh.metadata.staircaseId;
+        const idx = staircasesRef.current.findIndex((s) => s.id === clickedId);
+        if (idx !== -1) {
+          handleEditStaircaseRef.current(idx);
+        }
+      }
+
+      // Click on a camera to edit it
+      if (pick.pickedMesh?.metadata?.cameraId) {
+        const clickedId = pick.pickedMesh.metadata.cameraId;
+        const idx = camerasRef.current.findIndex((c) => c.id === clickedId);
+        if (idx !== -1) {
+          handleEditCameraRef.current(idx);
+        }
+      }
     };
 
     init();
@@ -747,6 +905,12 @@ export default function ConfigEditor() {
         removeCoverMesh(ctx.scene, coverMeshMapRef.current, id),
       );
       disposeAllTubes(tubeMeshMapRef.current);
+      Object.keys(staircaseMeshMapRef.current).forEach((id) =>
+        removeStaircaseMesh(ctx.scene, staircaseMeshMapRef.current, id),
+      );
+      Object.keys(cameraMeshMapRef.current).forEach((id) =>
+        removeCameraMesh(ctx.scene, cameraMeshMapRef.current, id),
+      );
       clearPreview();
       for (const m of wallEditorMeshesRef.current) m.dispose();
       wallEditorMeshesRef.current = [];
@@ -817,7 +981,7 @@ export default function ConfigEditor() {
 
       // Ctrl+Z undo (must check before the modifier guard)
       if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
-        if (!panelOpenRef.current && !displayPanelOpenRef.current && !coverPanelOpenRef.current && !wallPanelOpenRef.current && !tubePanelOpenRef.current) return;
+        if (!panelOpenRef.current && !displayPanelOpenRef.current && !coverPanelOpenRef.current && !wallPanelOpenRef.current && !tubePanelOpenRef.current && !staircasePanelOpenRef.current && !cameraPanelOpenRef.current) return;
         const stack = posUndoStackRef.current;
         if (stack.length === 0) return;
         e.preventDefault();
@@ -916,6 +1080,16 @@ export default function ConfigEditor() {
           handleCloseTubePanelRef.current();
           return;
         }
+        if (staircasePanelOpenRef.current) {
+          e.preventDefault();
+          handleCloseStaircasePanelRef.current();
+          return;
+        }
+        if (cameraPanelOpenRef.current) {
+          e.preventDefault();
+          handleCloseCameraPanelRef.current();
+          return;
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -983,7 +1157,7 @@ export default function ConfigEditor() {
       rebuildAllMeshes(scene, meshMapRef.current, updated);
 
       try {
-        await updateConfig({ lights: updated });
+        persistActiveFloor({ lights: updated });
         showToast('Light deleted & synced to server');
       } catch (e) {
         console.error('[Config] Auto-save failed:', e);
@@ -1014,7 +1188,7 @@ export default function ConfigEditor() {
       rebuildAllMeshes(scene, meshMapRef.current, updated);
 
       try {
-        await updateConfig({ lights: updated });
+        persistActiveFloor({ lights: updated });
         showToast('Light duplicated & synced to server');
       } catch (e) {
         console.error('[Config] Auto-save failed:', e);
@@ -1040,7 +1214,7 @@ export default function ConfigEditor() {
         }
       }
       try {
-        await updateConfig({ lights: updated });
+        persistActiveFloor({ lights: updated });
       } catch (e) {
         console.error('[Config] Reorder save failed:', e);
       }
@@ -1056,7 +1230,7 @@ export default function ConfigEditor() {
       );
       setLights(updated);
       try {
-        await updateConfig({ lights: updated });
+        persistActiveFloor({ lights: updated });
       } catch (e) {
         console.error('[Config] Move-to-group save failed:', e);
       }
@@ -1071,7 +1245,7 @@ export default function ConfigEditor() {
       const updated = [...lightGroups, newGroup];
       setLightGroups(updated);
       try {
-        await updateConfig({ lightGroups: updated });
+        persistActiveFloor({ lightGroups: updated });
       } catch (e) {
         console.error('[Config] Add group save failed:', e);
       }
@@ -1086,7 +1260,7 @@ export default function ConfigEditor() {
       );
       setLightGroups(updated);
       try {
-        await updateConfig({ lightGroups: updated });
+        persistActiveFloor({ lightGroups: updated });
       } catch (e) {
         console.error('[Config] Rename group save failed:', e);
       }
@@ -1103,7 +1277,7 @@ export default function ConfigEditor() {
       setLightGroups(updatedGroups);
       setLights(updatedLights);
       try {
-        await updateConfig({ lights: updatedLights, lightGroups: updatedGroups });
+        persistActiveFloor({ lights: updatedLights, lightGroups: updatedGroups });
       } catch (e) {
         console.error('[Config] Delete group save failed:', e);
       }
@@ -1146,7 +1320,7 @@ export default function ConfigEditor() {
 
       // Auto-save to server
       try {
-        await updateConfig({ lights: updated });
+        persistActiveFloor({ lights: updated });
         showToast('Light saved & synced to server');
       } catch (e) {
         console.error('[Config] Auto-save failed:', e);
@@ -1194,7 +1368,7 @@ export default function ConfigEditor() {
       setDisplays(updated);
 
       try {
-        await updateConfig({ displays: updated });
+        persistActiveFloor({ displays: updated });
         showToast('Display deleted & synced to server');
       } catch (e) {
         console.error('[Config] Auto-save failed:', e);
@@ -1225,7 +1399,7 @@ export default function ConfigEditor() {
       }
 
       try {
-        await updateConfig({ displays: updated });
+        persistActiveFloor({ displays: updated });
         showToast('Display duplicated & synced to server');
       } catch (e) {
         console.error('[Config] Auto-save failed:', e);
@@ -1383,7 +1557,7 @@ export default function ConfigEditor() {
       setDisplayEditIdx(null);
 
       try {
-        await updateConfig({ displays: updated });
+        persistActiveFloor({ displays: updated });
         showToast('Display saved & synced to server');
       } catch (e) {
         console.error('[Config] Auto-save failed:', e);
@@ -1426,7 +1600,7 @@ export default function ConfigEditor() {
       const updated = covers.filter((_, i) => i !== idx);
       setCovers(updated);
       try {
-        await updateConfig({ covers: updated });
+        persistActiveFloor({ covers: updated });
         showToast('Cover deleted & synced to server');
       } catch (e) {
         console.error('[Config] Auto-save failed:', e);
@@ -1457,7 +1631,7 @@ export default function ConfigEditor() {
       setCovers(updated);
       rebuildAllCoverMeshes(scene, coverMeshMapRef.current, updated, EDITOR_COVER_POSITION);
       try {
-        await updateConfig({ covers: updated });
+        persistActiveFloor({ covers: updated });
         showToast('Cover duplicated & synced to server');
       } catch (e) {
         console.error('[Config] Auto-save failed:', e);
@@ -1620,7 +1794,7 @@ export default function ConfigEditor() {
       setCoverEditIdx(null);
 
       try {
-        await updateConfig({ covers: updated });
+        persistActiveFloor({ covers: updated });
         showToast('Cover saved & synced to server');
       } catch (e) {
         console.error('[Config] Auto-save failed:', e);
@@ -1636,6 +1810,456 @@ export default function ConfigEditor() {
     if (draggingGizmoRef.current) return; // hitbox moves via gizmo; rebuild happens on drag end
     rebuildCoverPreview();
   }, [position, coverNormal, coverPanelOpen, rebuildCoverPreview]);
+
+  // --- Staircase handlers ---
+
+  const handleAddStaircase = useCallback(() => {
+    setStaircaseEditIdx(null);
+    setPosition({ x: 0, y: 0, z: 0 });
+    staircasePreviewInfoRef.current = { style: 'up', rotationY: 0 };
+    posUndoStackRef.current = [];
+    setStaircasePanelOpen(true);
+  }, []);
+
+  const handleEditStaircase = useCallback(
+    (idx: number) => {
+      const cfg = staircases[idx];
+      setStaircaseEditIdx(idx);
+      setPosition(cfg.position);
+      staircasePreviewInfoRef.current = { style: cfg.style, rotationY: cfg.rotationY ?? 0 };
+      posUndoStackRef.current = [];
+      setStaircasePanelOpen(true);
+    },
+    [staircases],
+  );
+  const handleEditStaircaseRef = useRef(handleEditStaircase);
+  handleEditStaircaseRef.current = handleEditStaircase;
+
+  const handleDeleteStaircase = useCallback(
+    (idx: number) => {
+      const scene = sceneCtxRef.current?.scene;
+      if (!scene) return;
+      removeStaircaseMesh(scene, staircaseMeshMapRef.current, staircases[idx].id);
+      const updated = staircases.filter((_, i) => i !== idx);
+      setStaircases(updated);
+      staircasesRef.current = updated;
+      persistActiveFloor({ staircases: updated });
+      showToast('Staircase deleted');
+    },
+    [staircases, persistActiveFloor, showToast],
+  );
+
+  const handleDuplicateStaircase = useCallback(
+    (idx: number) => {
+      const scene = sceneCtxRef.current?.scene;
+      if (!scene) return;
+      const src = staircases[idx];
+      const copy: StaircaseConfig = {
+        ...src,
+        id: generateUUID(),
+        position: { ...src.position, x: parseFloat((src.position.x + 0.6).toFixed(3)) },
+      };
+      const updated = [...staircases, copy];
+      setStaircases(updated);
+      staircasesRef.current = updated;
+      rebuildAllStaircaseMeshes(scene, staircaseMeshMapRef.current, updated);
+      persistActiveFloor({ staircases: updated });
+      showToast('Staircase duplicated');
+    },
+    [staircases, persistActiveFloor, showToast],
+  );
+
+  const handleCloseStaircasePanel = useCallback(() => {
+    const scene = sceneCtxRef.current?.scene;
+    if (staircasePreviewIdRef.current && scene) {
+      removeStaircaseMesh(scene, staircaseMeshMapRef.current, staircasePreviewIdRef.current);
+      staircasePreviewIdRef.current = null;
+    }
+    // Restore the original staircase mesh if we were editing
+    if (scene && staircaseEditIdx !== null) {
+      const cfg = staircasesRef.current[staircaseEditIdx];
+      if (cfg) staircaseMeshMapRef.current[cfg.id] = createStaircaseMesh(scene, cfg);
+    }
+    setStaircasePanelOpen(false);
+    clearPreview();
+    exitPlacingMode();
+    setStaircaseEditIdx(null);
+  }, [clearPreview, exitPlacingMode, staircaseEditIdx]);
+  const handleCloseStaircasePanelRef = useRef(handleCloseStaircasePanel);
+  handleCloseStaircasePanelRef.current = handleCloseStaircasePanel;
+
+  // Live preview staircase mesh + move gizmo attached to its root node
+  const rebuildStaircasePreview = useCallback(() => {
+    const scene = sceneCtxRef.current?.scene;
+    if (!scene) return;
+
+    const editingCfg = staircasesRef.current[staircaseEditIdx ?? -1];
+    const previewId = editingCfg?.id || '__stair_preview__';
+    const oldPreviewId = staircasePreviewIdRef.current;
+    if (oldPreviewId) {
+      removeStaircaseMesh(scene, staircaseMeshMapRef.current, oldPreviewId);
+    } else if (previewId !== '__stair_preview__') {
+      removeStaircaseMesh(scene, staircaseMeshMapRef.current, previewId);
+    }
+    staircasePreviewIdRef.current = previewId;
+
+    const info = staircasePreviewInfoRef.current;
+    const tempCfg: StaircaseConfig = {
+      id: previewId,
+      style: info.style,
+      targetFloorId: '',
+      position: positionRef.current,
+      rotationY: info.rotationY,
+    };
+    const entry = createStaircaseMesh(scene, tempCfg);
+    entry.hitbox.metadata = { previewTarget: 'stair' };
+    entry.steps.metadata = { previewTarget: 'stair' };
+    staircaseMeshMapRef.current[previewId] = entry;
+
+    if (gizmoRef.current) {
+      gizmoRef.current.dispose();
+      gizmoRef.current = null;
+    }
+    if (!utilLayerRef.current) {
+      utilLayerRef.current = new UtilityLayerRenderer(scene);
+    }
+    const gizmo = new PositionGizmo(utilLayerRef.current);
+    gizmo.scaleRatio = 1.2;
+    gizmo.updateGizmoRotationToMatchAttachedMesh = false;
+    // The root node's position IS the staircase world position (no parent).
+    gizmo.attachedNode = entry.root;
+
+    const onDragStart = () => {
+      draggingGizmoRef.current = true;
+      posUndoStackRef.current.push({ ...positionRef.current });
+    };
+    const onDrag = () => {
+      const p = entry.root.position;
+      const newPos: LightPosition = {
+        x: parseFloat(p.x.toFixed(3)),
+        y: parseFloat(p.y.toFixed(3)),
+        z: parseFloat(p.z.toFixed(3)),
+      };
+      positionRef.current = newPos;
+      setPosition(newPos);
+    };
+    const onDragEnd = () => {
+      draggingGizmoRef.current = false;
+      document.dispatchEvent(new Event('tour:gizmo-used'));
+      setPosition({ ...positionRef.current });
+    };
+    for (const ax of [gizmo.xGizmo, gizmo.yGizmo, gizmo.zGizmo]) {
+      ax.dragBehavior.onDragStartObservable.add(onDragStart);
+      ax.dragBehavior.onDragObservable.add(onDrag);
+      ax.dragBehavior.onDragEndObservable.add(onDragEnd);
+    }
+    for (const m of utilLayerRef.current!.utilityLayerScene.meshes) {
+      if (m.material) {
+        (m.material as StandardMaterial).alpha = 0.5;
+      }
+    }
+    gizmoRef.current = gizmo;
+  }, [staircaseEditIdx]);
+
+  const handleStaircasePreviewChange = useCallback(
+    (info: StaircasePreviewInfo) => {
+      staircasePreviewInfoRef.current = info;
+      if (staircasePanelOpenRef.current) rebuildStaircasePreview();
+    },
+    [rebuildStaircasePreview],
+  );
+
+  const handleSaveStaircase = useCallback(
+    (cfg: StaircaseConfig) => {
+      const scene = sceneCtxRef.current?.scene;
+      if (!scene) return;
+      if (staircasePreviewIdRef.current) {
+        removeStaircaseMesh(scene, staircaseMeshMapRef.current, staircasePreviewIdRef.current);
+        staircasePreviewIdRef.current = null;
+      }
+      let updated: StaircaseConfig[];
+      if (staircaseEditIdx !== null) {
+        updated = staircases.map((s, i) => (i === staircaseEditIdx ? cfg : s));
+      } else {
+        updated = [...staircases, cfg];
+      }
+      setStaircases(updated);
+      staircasesRef.current = updated;
+      clearPreview();
+      rebuildAllStaircaseMeshes(scene, staircaseMeshMapRef.current, updated);
+      setStaircasePanelOpen(false);
+      exitPlacingMode();
+      setStaircaseEditIdx(null);
+      persistActiveFloor({ staircases: updated });
+      showToast('Staircase saved');
+    },
+    [staircases, staircaseEditIdx, clearPreview, exitPlacingMode, persistActiveFloor, showToast],
+  );
+
+  // Rebuild staircase preview when position changes (skip during gizmo drag)
+  useEffect(() => {
+    if (!staircasePanelOpen) return;
+    if (draggingGizmoRef.current) return;
+    rebuildStaircasePreview();
+  }, [position, staircasePanelOpen, rebuildStaircasePreview]);
+
+  // --- Camera handlers ---
+
+  const handleAddCamera = useCallback(() => {
+    setCameraEditIdx(null);
+    setPosition({ x: 0, y: 2.6, z: 0 });
+    setCameraOrient({ rotationY: 0, tilt: 0 });
+    cameraOrientRef.current = { rotationY: 0, tilt: 0 };
+    posUndoStackRef.current = [];
+    setCameraPanelOpen(true);
+  }, []);
+
+  const handleEditCamera = useCallback(
+    (idx: number) => {
+      const cfg = cameras[idx];
+      const orient = { rotationY: cfg.rotationY ?? 0, tilt: cfg.tilt ?? 0 };
+      setCameraEditIdx(idx);
+      setPosition(cfg.position);
+      setCameraOrient(orient);
+      cameraOrientRef.current = orient;
+      posUndoStackRef.current = [];
+      setCameraPanelOpen(true);
+    },
+    [cameras],
+  );
+  const handleEditCameraRef = useRef(handleEditCamera);
+  handleEditCameraRef.current = handleEditCamera;
+
+  const handleDeleteCamera = useCallback(
+    (idx: number) => {
+      const scene = sceneCtxRef.current?.scene;
+      if (!scene) return;
+      removeCameraMesh(scene, cameraMeshMapRef.current, cameras[idx].id);
+      const updated = cameras.filter((_, i) => i !== idx);
+      setCameras(updated);
+      camerasRef.current = updated;
+      persistActiveFloor({ cameras: updated });
+      showToast('Camera deleted');
+    },
+    [cameras, persistActiveFloor, showToast],
+  );
+
+  const handleDuplicateCamera = useCallback(
+    (idx: number) => {
+      const scene = sceneCtxRef.current?.scene;
+      if (!scene) return;
+      const src = cameras[idx];
+      const copy: CameraConfig = {
+        ...src,
+        id: generateUUID(),
+        entityId: src.entityId,
+        label: (src.label || src.entityId) + ' (copy)',
+        position: { ...src.position, x: parseFloat((src.position.x + 0.5).toFixed(3)) },
+      };
+      const updated = [...cameras, copy];
+      setCameras(updated);
+      camerasRef.current = updated;
+      rebuildAllCameraMeshes(scene, cameraMeshMapRef.current, updated);
+      persistActiveFloor({ cameras: updated });
+      showToast('Camera duplicated');
+    },
+    [cameras, persistActiveFloor, showToast],
+  );
+
+  const handleCloseCameraPanel = useCallback(() => {
+    const scene = sceneCtxRef.current?.scene;
+    if (cameraPreviewIdRef.current && scene) {
+      removeCameraMesh(scene, cameraMeshMapRef.current, cameraPreviewIdRef.current);
+      cameraPreviewIdRef.current = null;
+    }
+    if (scene && cameraEditIdx !== null) {
+      const cfg = camerasRef.current[cameraEditIdx];
+      if (cfg) cameraMeshMapRef.current[cfg.id] = createCameraMesh(scene, cfg);
+    }
+    setCameraPanelOpen(false);
+    clearPreview();
+    exitPlacingMode();
+    setCameraEditIdx(null);
+  }, [clearPreview, exitPlacingMode, cameraEditIdx]);
+  const handleCloseCameraPanelRef = useRef(handleCloseCameraPanel);
+  handleCloseCameraPanelRef.current = handleCloseCameraPanel;
+
+  // Live preview camera mesh + move gizmo on its root node
+  const rebuildCameraPreview = useCallback(() => {
+    const scene = sceneCtxRef.current?.scene;
+    if (!scene) return;
+
+    const editingCfg = camerasRef.current[cameraEditIdx ?? -1];
+    const previewId = editingCfg?.id || '__cam_preview__';
+    const oldPreviewId = cameraPreviewIdRef.current;
+    if (oldPreviewId) {
+      removeCameraMesh(scene, cameraMeshMapRef.current, oldPreviewId);
+    } else if (previewId !== '__cam_preview__') {
+      removeCameraMesh(scene, cameraMeshMapRef.current, previewId);
+    }
+    cameraPreviewIdRef.current = previewId;
+
+    const orient = cameraOrientRef.current;
+    const tempCfg: CameraConfig = {
+      id: previewId,
+      entityId: '',
+      label: '',
+      position: positionRef.current,
+      rotationY: orient.rotationY,
+      tilt: orient.tilt,
+    };
+    const entry = createCameraMesh(scene, tempCfg);
+    entry.hitbox.metadata = { previewTarget: 'camera' };
+    cameraMeshMapRef.current[previewId] = entry;
+
+    if (gizmoRef.current) {
+      gizmoRef.current.dispose();
+      gizmoRef.current = null;
+    }
+    if (!utilLayerRef.current) {
+      utilLayerRef.current = new UtilityLayerRenderer(scene);
+    }
+    const gizmo = new PositionGizmo(utilLayerRef.current);
+    gizmo.scaleRatio = 1.2;
+    gizmo.updateGizmoRotationToMatchAttachedMesh = false;
+    gizmo.attachedNode = entry.root;
+
+    const onDragStart = () => {
+      draggingGizmoRef.current = true;
+      posUndoStackRef.current.push({ ...positionRef.current });
+    };
+    const onDrag = () => {
+      const p = entry.root.position;
+      const newPos: LightPosition = {
+        x: parseFloat(p.x.toFixed(3)),
+        y: parseFloat(p.y.toFixed(3)),
+        z: parseFloat(p.z.toFixed(3)),
+      };
+      positionRef.current = newPos;
+      setPosition(newPos);
+    };
+    const onDragEnd = () => {
+      draggingGizmoRef.current = false;
+      document.dispatchEvent(new Event('tour:gizmo-used'));
+      setPosition({ ...positionRef.current });
+    };
+    for (const ax of [gizmo.xGizmo, gizmo.yGizmo, gizmo.zGizmo]) {
+      ax.dragBehavior.onDragStartObservable.add(onDragStart);
+      ax.dragBehavior.onDragObservable.add(onDrag);
+      ax.dragBehavior.onDragEndObservable.add(onDragEnd);
+    }
+    for (const m of utilLayerRef.current!.utilityLayerScene.meshes) {
+      if (m.material) {
+        (m.material as StandardMaterial).alpha = 0.5;
+      }
+    }
+    gizmoRef.current = gizmo;
+  }, [cameraEditIdx]);
+
+  const handleSaveCamera = useCallback(
+    (cfg: CameraConfig) => {
+      const scene = sceneCtxRef.current?.scene;
+      if (!scene) return;
+      if (cameraPreviewIdRef.current) {
+        removeCameraMesh(scene, cameraMeshMapRef.current, cameraPreviewIdRef.current);
+        cameraPreviewIdRef.current = null;
+      }
+      let updated: CameraConfig[];
+      if (cameraEditIdx !== null) {
+        updated = cameras.map((c, i) => (i === cameraEditIdx ? cfg : c));
+      } else {
+        updated = [...cameras, cfg];
+      }
+      setCameras(updated);
+      camerasRef.current = updated;
+      clearPreview();
+      rebuildAllCameraMeshes(scene, cameraMeshMapRef.current, updated);
+      setCameraPanelOpen(false);
+      exitPlacingMode();
+      setCameraEditIdx(null);
+      persistActiveFloor({ cameras: updated });
+      showToast('Camera saved');
+    },
+    [cameras, cameraEditIdx, clearPreview, exitPlacingMode, persistActiveFloor, showToast],
+  );
+
+  // Rebuild camera preview when position or orientation changes (skip during gizmo drag)
+  useEffect(() => {
+    if (!cameraPanelOpen) return;
+    if (draggingGizmoRef.current) return;
+    rebuildCameraPreview();
+  }, [position, cameraOrient, cameraPanelOpen, rebuildCameraPreview]);
+
+  // --- Floor management handlers ---
+
+  const handleAddFloor = useCallback(() => {
+    const config = configRef.current;
+    if (!config) return;
+    const current = getFloors(config);
+    const nf = createEmptyFloor(`Floor ${current.length + 1}`, current.length);
+    const updated = [...current, nf];
+    configRef.current = { ...config, floors: updated };
+    setFloors(updated);
+    try { updateConfig({ floors: updated }); } catch (e) {
+      console.warn('[Config] Add floor failed:', e);
+    }
+    switchEditFloor(nf.id);
+    showToast(`Added "${nf.name}" — upload its model`);
+  }, [switchEditFloor, showToast]);
+
+  const handleRenameFloor = useCallback(() => {
+    const config = configRef.current;
+    if (!config) return;
+    const cur = getFloors(config).find((f) => f.id === editFloorIdRef.current);
+    const name = window.prompt('Floor name', cur?.name ?? '');
+    if (!name) return;
+    persistActiveFloor({ name });
+  }, [persistActiveFloor]);
+
+  const handleDeleteFloor = useCallback(() => {
+    const config = configRef.current;
+    if (!config) return;
+    const cur = getFloors(config);
+    if (cur.length <= 1) {
+      showToast('Cannot delete the only floor');
+      return;
+    }
+    const victim = cur.find((f) => f.id === editFloorIdRef.current);
+    if (!victim) return;
+    if (!window.confirm(`Delete floor "${victim.name}" and its model?`)) return;
+    // Drop the floor, delete its model, and unlink staircases that targeted it
+    const remaining = cur
+      .filter((f) => f.id !== victim.id)
+      .map((f) => ({
+        ...f,
+        staircases: (f.staircases ?? []).filter((s) => s.targetFloorId !== victim.id),
+      }));
+    configRef.current = { ...config, floors: remaining };
+    setFloors(remaining);
+    try { updateConfig({ floors: remaining }); } catch (e) {
+      console.warn('[Config] Delete floor failed:', e);
+    }
+    deleteModelBlob(victim.modelId).catch(() => {});
+    switchEditFloor(remaining[0].id);
+    showToast(`Deleted "${victim.name}"`);
+  }, [switchEditFloor, showToast]);
+
+  const handleUploadFloorModel = useCallback(
+    async (file: File) => {
+      const config = configRef.current;
+      if (!config) return;
+      const floor = getFloors(config).find((f) => f.id === editFloorIdRef.current);
+      if (!floor) return;
+      try {
+        await uploadModel(file, floor.modelId);
+        await loadFloorIntoEditor(floor);
+        showToast(`Model uploaded for "${floor.name}"`);
+      } catch (e) {
+        alert('Upload failed: ' + (e instanceof Error ? e.message : e));
+      }
+    },
+    [loadFloorIntoEditor, showToast],
+  );
 
   // --- Shadow wall handlers ---
 
@@ -1662,7 +2286,7 @@ export default function ConfigEditor() {
       const updated = shadowWalls.filter((_, i) => i !== idx);
       setShadowWalls(updated);
       try {
-        await updateConfig({ shadowWalls: updated });
+        persistActiveFloor({ shadowWalls: updated });
         showToast('Wall deleted & synced to server');
       } catch (e) {
         console.error('[Config] Auto-save failed:', e);
@@ -1685,7 +2309,7 @@ export default function ConfigEditor() {
       const updated = [...shadowWalls, copy];
       setShadowWalls(updated);
       try {
-        await updateConfig({ shadowWalls: updated });
+        persistActiveFloor({ shadowWalls: updated });
         showToast('Wall duplicated & synced to server');
       } catch (e) {
         console.error('[Config] Auto-save failed:', e);
@@ -1734,7 +2358,7 @@ export default function ConfigEditor() {
       setWallEditIdx(null);
 
       try {
-        await updateConfig({ shadowWalls: updated });
+        persistActiveFloor({ shadowWalls: updated });
         showToast('Wall saved & synced to server');
       } catch (e) {
         console.error('[Config] Auto-save failed:', e);
@@ -1789,7 +2413,7 @@ export default function ConfigEditor() {
       const updated = tubes.filter((_, i) => i !== idx);
       setTubes(updated);
       try {
-        await updateConfig({ tubes: updated });
+        persistActiveFloor({ tubes: updated });
         showToast('Tube deleted & synced to server');
       } catch (e) {
         console.error('[Config] Auto-save failed:', e);
@@ -1817,7 +2441,7 @@ export default function ConfigEditor() {
         tubeMeshMapRef.current[copy.id] = createTubeMeshes(scene, copy, null);
       }
       try {
-        await updateConfig({ tubes: updated });
+        persistActiveFloor({ tubes: updated });
         showToast('Tube duplicated & synced to server');
       } catch (e) {
         console.error('[Config] Auto-save failed:', e);
@@ -1892,7 +2516,7 @@ export default function ConfigEditor() {
       }
 
       try {
-        await updateConfig({ tubes: updated });
+        persistActiveFloor({ tubes: updated });
         showToast('Tube saved & synced to server');
       } catch (e) {
         console.error('[Config] Auto-save failed:', e);
@@ -2038,45 +2662,30 @@ export default function ConfigEditor() {
   // Save config to server
   const handleSaveConfig = useCallback(async () => {
     try {
-      await updateConfig({ lights, lightGroups, displays, covers, shadowWalls, tubes });
-      showToast(`Saved ${lights.length} lights + ${displays.length} displays + ${covers.length} covers + ${shadowWalls.length} walls + ${tubes.length} tubes to server`);
+      // The current editor arrays belong to the active floor.
+      persistActiveFloor({ lights, lightGroups, displays, covers, shadowWalls, tubes, staircases, cameras });
+      showToast(`Saved floor "${floors.find((f) => f.id === editFloorId)?.name ?? ''}" (${lights.length} lights, ${covers.length} covers, ${cameras.length} cams)`);
     } catch (e) {
       alert('Failed to save config: ' + (e instanceof Error ? e.message : e));
     }
-  }, [lights, lightGroups, displays, covers, shadowWalls, tubes, showToast]);
+  }, [lights, lightGroups, displays, covers, shadowWalls, tubes, staircases, cameras, floors, editFloorId, persistActiveFloor, showToast]);
 
-  // Load config from server
+  // Reload config from storage and rebuild the current floor
   const handleLoadConfig = useCallback(async () => {
     try {
       const config = await getConfig();
-      setLights(config.lights || []);
-      setLightGroups(config.lightGroups || []);
-      setDisplays(config.displays || []);
-      setCovers(config.covers || []);
-      coversRef.current = config.covers || [];
-      setShadowWalls(config.shadowWalls || []);
-      setTubes(config.tubes || []);
-      tubesRef.current = config.tubes || [];
-      const scene = sceneCtxRef.current?.scene;
-      if (scene) {
-        rebuildAllCoverMeshes(scene, coverMeshMapRef.current, config.covers || [], EDITOR_COVER_POSITION);
-        rebuildAllMeshes(scene, meshMapRef.current, config.lights || []);
-        rebuildAllDisplayMeshes(scene, displayMeshMapRef.current, config.displays || []);
-        for (const entry of Object.values(displayMeshMapRef.current)) {
-          entry.plane.isPickable = true;
-          updateDisplayTexture(entry, buildMockupStates(displaysRef.current));
-        }
-        disposeAllTubes(tubeMeshMapRef.current);
-        for (const tc of (config.tubes || [])) {
-          tubeMeshMapRef.current[tc.id] = createTubeMeshes(scene, tc, null);
-        }
-        renderMockupLabels(tubeMeshMapRef.current);
-      }
-      showToast(`Loaded ${config.lights?.length || 0} lights + ${config.displays?.length || 0} displays + ${config.covers?.length || 0} covers + ${config.shadowWalls?.length || 0} walls + ${config.tubes?.length || 0} tubes`);
+      configRef.current = config;
+      const floorList = getFloors(config);
+      setFloors(floorList);
+      const active = floorList.find((f) => f.id === editFloorIdRef.current) ?? floorList[0];
+      setEditFloorId(active.id);
+      editFloorIdRef.current = active.id;
+      await loadFloorIntoEditor(active);
+      showToast(`Loaded floor "${active.name}"`);
     } catch (e) {
       alert('Failed to load config: ' + (e instanceof Error ? e.message : e));
     }
-  }, [showToast]);
+  }, [loadFloorIntoEditor, showToast]);
 
   return (
     <div className="config-editor">
@@ -2089,6 +2698,34 @@ export default function ConfigEditor() {
               &larr; Dashboard
             </Link>
           </div>
+        </div>
+
+        {/* Floor selector */}
+        <div className="floor-bar">
+          <input
+            ref={floorFileRef}
+            type="file"
+            accept=".glb"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) handleUploadFloorModel(f);
+              e.target.value = '';
+            }}
+          />
+          <select
+            value={editFloorId}
+            onChange={(e) => switchEditFloor(e.target.value)}
+            title="Floor being edited"
+          >
+            {floors.map((f) => (
+              <option key={f.id} value={f.id}>{f.name}</option>
+            ))}
+          </select>
+          <button className="floor-bar-btn" title="Upload this floor's model" onClick={() => floorFileRef.current?.click()}>⬆</button>
+          <button className="floor-bar-btn" title="Rename floor" onClick={handleRenameFloor}>✎</button>
+          <button className="floor-bar-btn" title="Add floor" onClick={handleAddFloor}>+</button>
+          <button className="floor-bar-btn" title="Delete floor" onClick={handleDeleteFloor}>&times;</button>
         </div>
 
         {/* Mode tabs */}
@@ -2126,6 +2763,20 @@ export default function ConfigEditor() {
             onClick={() => setEditorMode('tubes')}
           >
             Tubes ({tubes.length})
+          </button>
+          <button
+            className={`editor-tab${editorMode === 'stairs' ? ' active' : ''}`}
+            data-tab="stairs"
+            onClick={() => setEditorMode('stairs')}
+          >
+            Stairs ({staircases.length})
+          </button>
+          <button
+            className={`editor-tab${editorMode === 'cameras' ? ' active' : ''}`}
+            data-tab="cameras"
+            onClick={() => setEditorMode('cameras')}
+          >
+            Cameras ({cameras.length})
           </button>
         </div>
 
@@ -2168,13 +2819,30 @@ export default function ConfigEditor() {
               onDelete={handleDeleteWall}
               onDuplicate={handleDuplicateWall}
             />
-          ) : (
+          ) : editorMode === 'tubes' ? (
             <TubeList
               tubes={tubes}
               selectedIdx={tubeEditIdx}
               onSelect={handleEditTube}
               onDelete={handleDeleteTube}
               onDuplicate={handleDuplicateTube}
+            />
+          ) : editorMode === 'stairs' ? (
+            <StaircaseList
+              staircases={staircases}
+              floorNames={floorNameMap(floors)}
+              selectedIdx={staircaseEditIdx}
+              onSelect={handleEditStaircase}
+              onDelete={handleDeleteStaircase}
+              onDuplicate={handleDuplicateStaircase}
+            />
+          ) : (
+            <CameraList
+              cameras={cameras}
+              selectedIdx={cameraEditIdx}
+              onSelect={handleEditCamera}
+              onDelete={handleDeleteCamera}
+              onDuplicate={handleDuplicateCamera}
             />
           )}
         </div>
@@ -2196,9 +2864,22 @@ export default function ConfigEditor() {
             <button className="btn btn-primary editor-add-btn" onClick={handleAddWall}>
               + Add Wall
             </button>
-          ) : (
+          ) : editorMode === 'tubes' ? (
             <button className="btn btn-primary editor-add-btn" onClick={handleAddTube}>
               + Add Tube
+            </button>
+          ) : editorMode === 'stairs' ? (
+            <button
+              className="btn btn-primary editor-add-btn"
+              onClick={handleAddStaircase}
+              disabled={floors.length < 2}
+              title={floors.length < 2 ? 'Add another floor first' : undefined}
+            >
+              + Add Staircase
+            </button>
+          ) : (
+            <button className="btn btn-primary editor-add-btn" onClick={handleAddCamera}>
+              + Add Camera
             </button>
           )}
           <button className="btn btn-ghost" onClick={handleLoadConfig}>
@@ -2214,7 +2895,7 @@ export default function ConfigEditor() {
       <div className="canvas-area editor-canvas">
         <canvas ref={canvasRef} />
         <div className={`mode-banner${placingMode ? ' visible' : ''}`}>
-          {displayPanelOpen ? 'Click on a wall surface to place display' : coverPanelOpen ? 'Click the center of a window to place the shutter' : wallPanelOpen ? 'Click on the model to place wall' : 'Click on the model to place light'}
+          {displayPanelOpen ? 'Click on a wall surface to place display' : coverPanelOpen ? 'Click the center of a window to place the shutter' : wallPanelOpen ? 'Click on the model to place wall' : staircasePanelOpen ? 'Click an open spot on the floor to place the staircase' : cameraPanelOpen ? 'Click a ceiling spot to mount the camera' : 'Click on the model to place light'}
         </div>
         <div className="coord-readout">{coordText}</div>
         <div className={`toast${toastVisible ? ' show' : ''}`}>{toastMsg}</div>
@@ -2285,6 +2966,35 @@ export default function ConfigEditor() {
           onSave={handleSaveTube}
           onClose={handleCloseTubePanel}
           onPreviewChange={handleTubePreviewChange}
+          haEntities={haEntities}
+        />
+
+        <StaircaseForm
+          open={staircasePanelOpen}
+          editStaircase={staircaseEditIdx !== null ? staircases[staircaseEditIdx] : null}
+          position={position}
+          onPositionChange={handlePositionChange}
+          onSave={handleSaveStaircase}
+          onClose={handleCloseStaircasePanel}
+          onEnterPlacingMode={enterPlacingMode}
+          onExitPlacingMode={exitPlacingMode}
+          onPreviewChange={handleStaircasePreviewChange}
+          placingMode={placingMode}
+          floors={floors.filter((f) => f.id !== editFloorId).map((f) => ({ id: f.id, name: f.name }))}
+        />
+
+        <CameraForm
+          open={cameraPanelOpen}
+          editCamera={cameraEditIdx !== null ? cameras[cameraEditIdx] : null}
+          position={position}
+          orientation={cameraOrient}
+          onPositionChange={handlePositionChange}
+          onOrientationChange={setCameraOrient}
+          onSave={handleSaveCamera}
+          onClose={handleCloseCameraPanel}
+          onEnterPlacingMode={enterPlacingMode}
+          onExitPlacingMode={exitPlacingMode}
+          placingMode={placingMode}
           haEntities={haEntities}
         />
       </div>
