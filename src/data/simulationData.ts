@@ -257,7 +257,11 @@ const SIM_TUBES: TubeConfig[] = [
 ];
 
 // Entity ids that live on the upper floor (everything else is ground floor).
-const UPSTAIRS_LIGHT_IDS = new Set(["light.bedroom_roof", "light.bathroom", "light.bedroom_bed"]);
+const UPSTAIRS_LIGHT_IDS = new Set([
+  "light.bedroom_roof",
+  "light.bathroom",
+  "light.bedroom_bed",
+]);
 const UPSTAIRS_GROUP_IDS = new Set([GROUP_BEDROOM, GROUP_BATHROOM]);
 
 /**
@@ -310,9 +314,9 @@ export const SIMULATION_CONFIG: AppConfig = {
           id: "sim-cam-entrance",
           entityId: "camera.living_wall",
           label: "Living (wall)",
-          position: { x: -8.65, y: 2.55, z: -2.6 },
+          position: { x: 0, y: 2.55, z: -2.6 },
           rotationY: -Math.PI / 2,
-          tilt: Math.PI / 3,
+          tilt: Math.PI / 2,
         },
       ],
     },
@@ -425,7 +429,21 @@ export const SIMULATION_CONFIG: AppConfig = {
         icon: "Clapperboard",
         layout: { x: 2, y: 5, w: 2, h: 1 },
       },
+      // Toggles the demo alarm on/off → scene blinks red while triggered.
+      {
+        id: "sim-script-alarm",
+        type: "script" as const,
+        title: "Alarm",
+        showTitle: true,
+        entityId: "alarm_control_panel.home",
+        icon: "Siren",
+        layout: { x: 0, y: 6, w: 4, h: 1 },
+      },
     ],
+  },
+  alarm: {
+    entityId: "alarm_control_panel.home",
+    activeStates: ["triggered"],
   },
 };
 

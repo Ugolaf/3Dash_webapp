@@ -102,8 +102,18 @@ export class DemoHAConnection {
     lightConfigs: LightConfig[],
     sensorEntityIds: string[],
     coverConfigs: CoverConfig[] = [],
+    alarmEntityId?: string,
   ): void {
     if (this.disposed) return;
+
+    // Alarm panel starts disarmed; the sidebar button toggles it.
+    if (alarmEntityId) {
+      this.states.set(alarmEntityId, {
+        entity_id: alarmEntityId,
+        state: 'disarmed',
+        attributes: {},
+      });
+    }
 
     const persisted = loadPersistedStates();
 
@@ -206,6 +216,14 @@ export class DemoHAConnection {
     // Script calls: simulate 1.5s delay
     if (domain === "script") {
       await new Promise((r) => setTimeout(r, 1500));
+      return;
+    }
+
+    // Alarm panel: any button press toggles disarmed ↔ triggered (demo).
+    if (domain === "alarm_control_panel") {
+      const current = this.states.get(entityId);
+      const next = current?.state === "triggered" ? "disarmed" : "triggered";
+      this.updateState(entityId, next, {});
       return;
     }
 

@@ -7,7 +7,7 @@ import {
   Github, HeartHandshake, Scale,
 } from 'lucide-react';
 import { buildWsUrl, type HAConnectionStatus } from '../services/haWebSocket';
-import type { HASettings } from '../types';
+import type { HASettings, AlarmConfig } from '../types';
 import { getConfig, resetConfig, updateConfig, exportBackup, importBackup } from '../services/configApi';
 import { clearSettings, getSetting, getSettings, updateSettings } from '../services/settingsStore';
 import { useDemoMode } from '../contexts/DemoModeContext';
@@ -84,6 +84,10 @@ interface Props {
   haSettings: HASettings;
   onHASettingsSave: (settings: HASettings) => void;
 
+  /* Alarm (scene-wide red blink driven by an HA state) */
+  alarm?: AlarmConfig;
+  onAlarmSave: (alarm: AlarmConfig | undefined) => void;
+
   /* Status */
   lightsOnCount: number;
   haStatus: HAConnectionStatus;
@@ -136,6 +140,8 @@ export default function SettingsModal({
   onChangeHomeView,
   haSettings,
   onHASettingsSave,
+  alarm,
+  onAlarmSave,
   lightsOnCount,
   haStatus,
   modelStatus,
@@ -156,6 +162,8 @@ export default function SettingsModal({
   const [haPort, setHaPort] = useState(haSettings.port);
   const [haToken, setHaToken] = useState(haSettings.token);
   const [haSaveStatus, setHaSaveStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
+  const [alarmEntity, setAlarmEntity] = useState(alarm?.entityId ?? '');
+  const [alarmStates, setAlarmStates] = useState((alarm?.activeStates ?? []).join(', '));
   const [latitude, setLatitude] = useState('');
   const [longitude, setLongitude] = useState('');
   const importInputRef = useRef<HTMLInputElement>(null);
@@ -234,6 +242,21 @@ export default function SettingsModal({
     setHaPort(haSettings.port);
     setHaToken(haSettings.token);
   }, [haSettings.url, haSettings.port, haSettings.token]);
+
+  useEffect(() => {
+    setAlarmEntity(alarm?.entityId ?? '');
+    setAlarmStates((alarm?.activeStates ?? []).join(', '));
+  }, [alarm?.entityId, alarm?.activeStates]);
+
+  const handleAlarmSave = useCallback(() => {
+    const entityId = alarmEntity.trim();
+    if (!entityId) {
+      onAlarmSave(undefined);
+      return;
+    }
+    const states = alarmStates.split(',').map((s) => s.trim()).filter(Boolean);
+    onAlarmSave({ entityId, activeStates: states.length ? states : undefined });
+  }, [alarmEntity, alarmStates, onAlarmSave]);
 
   const handleHASave = useCallback(() => {
     if (!haUrl || !haToken) return;
@@ -467,6 +490,33 @@ export default function SettingsModal({
                         : haSaveStatus === 'error' ? '\u2717 Failed'
                         : 'Save'}
                     </button>
+                  </div>
+                </div>
+
+                <div className="settings-section">
+                  <div className="settings-section-label">Alarm</div>
+                  <div className="settings-ha-fields">
+                    <div className="settings-ha-field">
+                      <label className="settings-ha-label">Entity to watch</label>
+                      <input
+                        className="settings-ha-input"
+                        type="text"
+                        placeholder="alarm_control_panel.home"
+                        value={alarmEntity}
+                        onChange={(e) => setAlarmEntity(e.target.value)}
+                      />
+                    </div>
+                    <div className="settings-ha-field">
+                      <label className="settings-ha-label">Active states (comma-separated)</label>
+                      <input
+                        className="settings-ha-input"
+                        type="text"
+                        placeholder="triggered"
+                        value={alarmStates}
+                        onChange={(e) => setAlarmStates(e.target.value)}
+                      />
+                    </div>
+                    <button className="settings-action-btn" onClick={handleAlarmSave}>Save</button>
                   </div>
                 </div>
               </div>

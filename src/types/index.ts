@@ -173,6 +173,15 @@ export interface OnboardingState {
   completed: boolean;
 }
 
+// --- Alarm (scene-wide red blink driven by an HA state) ---
+
+export interface AlarmConfig {
+  /** HA entity to watch (e.g. alarm_control_panel.home, binary_sensor.alarm). */
+  entityId: string;
+  /** States that mean the alarm is active/triggered. Defaults to ['triggered']. */
+  activeStates?: string[];
+}
+
 // --- Floors & Staircases (multi-floor navigation) ---
 
 export interface StaircaseConfig {
@@ -231,6 +240,8 @@ export interface AppConfig {
   floors?: FloorConfig[];
   /** Id of the floor currently shown (defaults to the first floor). */
   activeFloorId?: string;
+  /** Optional scene-wide alarm (red blink) driven by an HA state. */
+  alarm?: AlarmConfig;
 }
 
 export interface HASettings {
@@ -255,6 +266,7 @@ export interface FullConfig {
   onboarding?: OnboardingState;
   floors?: FloorConfig[];
   activeFloorId?: string;
+  alarm?: AlarmConfig;
 }
 
 export interface HAStateAttributes {

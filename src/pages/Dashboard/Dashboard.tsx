@@ -117,6 +117,9 @@ export default function Dashboard() {
   const [cameraModalConfig, setCameraModalConfig] = useState<CameraConfig | null>(null);
   const [cameraModalState, setCameraModalState] = useState<HAState | null>(null);
 
+  /** True while the configured HA alarm entity is in an active state. */
+  const [alarmActive, setAlarmActive] = useState(false);
+
   const [remoteModalVisible, setRemoteModalVisible] = useState(false);
   const [remoteModalEntityId, setRemoteModalEntityId] = useState<string | null>(null);
   const [remoteModalLabel, setRemoteModalLabel] = useState('');
@@ -1272,6 +1275,9 @@ export default function Dashboard() {
       onStatusChanged: (status: HAConnectionStatus) => setHaStatus(status),
       onStateChanged: (entityId: string, state: HAState) => {
         stopPendingFeedback(entityId);
+        if (config.alarm && entityId === config.alarm.entityId) {
+          setAlarmActive((config.alarm.activeStates ?? ['triggered']).includes(state.state));
+        }
         if (meshMapRef.current[entityId]) applyLightState(entityId, state);
         if (coverMeshMapRef.current[entityId]) applyCoverState(entityId, state);
         if (entityId === coverModalEntityIdRef.current) setCoverModalState(state);
@@ -1325,6 +1331,9 @@ export default function Dashboard() {
         const newCardStates: Record<string, HAState> = {};
         states.forEach((state) => {
           lastStatesRef.current[state.entity_id] = state;
+          if (config.alarm && state.entity_id === config.alarm.entityId) {
+            setAlarmActive((config.alarm.activeStates ?? ['triggered']).includes(state.state));
+          }
           if (meshMapRef.current[state.entity_id]) applyLightState(state.entity_id, state);
           if (coverMeshMapRef.current[state.entity_id]) applyCoverState(state.entity_id, state);
           if (panelEntities.has(state.entity_id)) newCardStates[state.entity_id] = state;
@@ -1372,7 +1381,7 @@ export default function Dashboard() {
           if (!sensorIds.includes(line.sensorId)) sensorIds.push(line.sensorId);
         }
       }
-      demo.start(allEntities.lights, sensorIds, allEntities.covers);
+      demo.start(allEntities.lights, sensorIds, allEntities.covers, config.alarm?.entityId);
     } else {
       const haSettings = getSetting('connection').haSettings;
       const ha = new HAConnection(
@@ -1925,6 +1934,13 @@ export default function Dashboard() {
           }}
         />
 
+        {alarmActive && (
+          <>
+            <div className="alarm-overlay" />
+            <div className="alarm-banner">&#9888; ALARM</div>
+          </>
+        )}
+
         <HUD
           latitude={configRef.current?.location.latitude ?? 43.6077}
           longitude={configRef.current?.location.longitude ?? 3.8766}
@@ -2052,6 +2068,12 @@ export default function Dashboard() {
           onHASettingsSave={(settings) => {
             updateSettings('connection', { haSettings: settings });
             setHaSettingsVersion(v => v + 1);
+          }}
+          alarm={configRef.current?.alarm}
+          onAlarmSave={(a) => {
+            if (configRef.current) configRef.current.alarm = a;
+            try { updateConfig({ alarm: a }); } catch (e) { console.warn('[Config] alarm save failed:', e); }
+            if (!a) setAlarmActive(false);
           }}
           lightsOnCount={lightsOnCount}
           haStatus={haStatus}

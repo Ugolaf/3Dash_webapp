@@ -40,6 +40,38 @@
   pointer-events: all; /* block clicks mid-transition */
 }
 
+/* Alarm mode — pulsing red vignette + banner while an HA alarm is active */
+.alarm-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 42;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, rgba(230, 10, 10, 0.12) 30%, rgba(210, 8, 8, 0.85) 100%);
+  animation: alarm-blink 0.9s steps(1, end) infinite;
+}
+
+.alarm-banner {
+  position: absolute;
+  top: 54px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 43;
+  padding: 6px 18px;
+  border-radius: 999px;
+  background: rgba(180, 12, 12, 0.9);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  pointer-events: none;
+  box-shadow: 0 0 18px rgba(220, 20, 20, 0.7);
+  animation: alarm-blink 0.9s steps(1, end) infinite;
+}
+
+@keyframes alarm-blink {
+  50% { opacity: 0.12; }
+}
+
 /* Current-floor badge */
 .floor-badge {
   position: absolute;

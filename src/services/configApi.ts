@@ -53,6 +53,7 @@ export function updateConfig(data: {
   onboarding?: { completed: boolean };
   floors?: import('../types').FloorConfig[];
   activeFloorId?: string;
+  alarm?: import('../types').AlarmConfig;
 }): void {
   if (isSimulationActive()) {
     // Update in-memory override so the UI reacts, but never persist
