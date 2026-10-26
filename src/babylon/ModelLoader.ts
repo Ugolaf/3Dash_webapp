@@ -165,7 +165,7 @@ export function setSketchAppearance(scene: Scene, sketchColor: string, sketchSpe
   mat.specularColor = new Color3(s, s, s);
 }
 
-interface RenderStyleOptions {
+export interface RenderStyleOptions {
   showTextures: boolean;
   sketchColor: string;
   sketchSpecular: number;
@@ -175,7 +175,7 @@ interface RenderStyleOptions {
  * Apply either the cartoon (sketch) style or the original textured materials.
  * Stores each mesh's original material once so the modes can be toggled at runtime.
  */
-function applyRenderStyle(scene: Scene, meshes: AbstractMesh[], opts: RenderStyleOptions): void {
+export function applyRenderStyle(scene: Scene, meshes: AbstractMesh[], opts: RenderStyleOptions): void {
   setSketchAppearance(scene, opts.sketchColor, opts.sketchSpecular);
   const cartoonMat = getOrCreateCartoonMaterial(scene);
 
@@ -233,8 +233,9 @@ export function createShadowWalls(
   scene: Scene,
   walls: Array<{ position: { x: number; y: number; z: number }; size: { width: number; height: number; depth: number } }>,
 ): Mesh[] {
-  const mat = new StandardMaterial('shadow_wall_mat', scene);
-  mat.disableLighting = true;
+  // One shared material per scene: walls are rebuilt on every floor switch
+  const mat = (scene.getMaterialByName('shadow_wall_mat') as StandardMaterial | null)
+    ?? Object.assign(new StandardMaterial('shadow_wall_mat', scene), { disableLighting: true });
 
   return walls.map((w, i) => {
     const mesh = MeshBuilder.CreateBox(`shadow_wall_${i}`, {

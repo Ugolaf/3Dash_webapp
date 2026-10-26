@@ -108,7 +108,8 @@ export function createModelShadow(
  */
 export function disposeModelShadow(): void {
   shadowMesh?.dispose();
-  shadowMat?.dispose();
+  // forceDisposeTextures: the gradient DynamicTexture is rebuilt on every floor
+  shadowMat?.dispose(false, true);
   shadowMesh = null;
   shadowMat = null;
 }

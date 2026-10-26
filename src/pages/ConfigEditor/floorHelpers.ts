@@ -10,12 +10,17 @@ export function patchFloor(
   return floors.map((f) => (f.id === floorId ? { ...f, ...patch } : f));
 }
 
-/** A blank floor with a unique id and its own model key. */
-export function createEmptyFloor(name: string, order: number): FloorConfig {
+/** A blank floor (or exterior overview) with a unique id and its own model key. */
+export function createEmptyFloor(
+  name: string,
+  order: number,
+  kind: FloorConfig['kind'] = 'floor',
+): FloorConfig {
   const id = generateUUID();
   return {
     id,
     name,
+    kind,
     modelId: `model_${id}`,
     order,
     lights: [],

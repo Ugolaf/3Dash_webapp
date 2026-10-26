@@ -2,6 +2,7 @@ import {
   Scene,
   MeshBuilder,
   StandardMaterial,
+  type Material,
   Color3,
   Vector3,
   PointLight,
@@ -313,10 +314,17 @@ export function removeLightMesh(meshMap: MeshMap, entityId: string): void {
     const sl = entry.stripLights[i];
     if (sl !== entry.light) sl.dispose();
   }
+  // Materials are per-light (bulb shared with extra bulbs, hitbox its own) —
+  // collect them before the meshes go, or they pile up on every floor switch.
+  const mats = new Set<Material>();
+  for (const m of [entry.bulb, entry.hitboxMesh, ...entry.extraBulbs]) {
+    if (m?.material) mats.add(m.material);
+  }
   for (const eb of entry.extraBulbs) eb.dispose();
   entry.hitboxMesh?.dispose();
   entry.bulb.dispose();
   entry.light?.dispose();
+  for (const mat of mats) mat.dispose();
   delete meshMap[entityId];
 }
 

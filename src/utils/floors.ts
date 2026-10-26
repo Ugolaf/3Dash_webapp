@@ -33,6 +33,18 @@ export function getFloors(config: AppConfig): FloorConfig[] {
   ];
 }
 
+export function isOverviewFloor(floor: FloorConfig): boolean {
+  return floor.kind === 'overview';
+}
+
+/** Floors in navigation order: the exterior overview first, then by `order`. */
+export function getNavFloors(floors: FloorConfig[]): FloorConfig[] {
+  return [...floors].sort((a, b) => {
+    const ov = Number(isOverviewFloor(b)) - Number(isOverviewFloor(a));
+    return ov !== 0 ? ov : (a.order ?? 0) - (b.order ?? 0);
+  });
+}
+
 /** The floor currently shown (matches activeFloorId, else the first floor). */
 export function getActiveFloor(config: AppConfig): FloorConfig {
   const floors = getFloors(config);

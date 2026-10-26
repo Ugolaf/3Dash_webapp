@@ -206,6 +206,9 @@ export interface StaircaseConfig {
 export interface FloorConfig {
   id: string;
   name: string;
+  /** 'overview' = exterior view of the whole building (roof, garden, outdoor
+   *  shutters/lights), framed in 3/4 perspective and listed first. Default 'floor'. */
+  kind?: 'floor' | 'overview';
   /** Model-storage key (IndexedDB). Legacy single-model configs use 'model'. */
   modelId: string;
   /** Ordinal for editor ordering. */

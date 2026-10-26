@@ -1,6 +1,6 @@
 import { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Animation, Camera, Color3, Color4, CubicEase, EasingFunction, ShadowGenerator, Tools, Vector3, type AbstractMesh, type Mesh, type Observer, type Scene } from '@babylonjs/core';
+import { Animation, Camera, Color3, Color4, CubicEase, EasingFunction, ShadowGenerator, Tools, Vector3, type AbstractMesh, type Material, type Mesh, type Observer, type Scene } from '@babylonjs/core';
 import { createScene, setupSunShadows, type SceneContext } from '../../babylon/SceneManager';
 import { loadModel, createShadowWalls, setTexturesEnabled, setSketchAppearance } from '../../babylon/ModelLoader';
 import { createEdgeOutline, type EdgeOutlineControls } from '../../babylon/EdgeOutline';
@@ -37,7 +37,7 @@ import {
 } from '../../babylon/CameraMeshFactory';
 import CameraModal from '../../components/CameraModal';
 import { getConfig, updateConfig, getModelBlob } from '../../services/configApi';
-import { getActiveFloor, getFloors, collectAllEntityIds, findLightConfig, findCoverConfig, findDisplayConfig, findTubeConfig, findCameraConfig } from '../../utils/floors';
+import { getActiveFloor, getFloors, isOverviewFloor, collectAllEntityIds, findLightConfig, findCoverConfig, findDisplayConfig, findTubeConfig, findCameraConfig } from '../../utils/floors';
 import type { FloorConfig, CameraConfig } from '../../types';
 import { getEntityCache, setEntityCache } from '../../services/entityCache';
 import type { HAEntityOption } from '../../components/EntityPicker';
@@ -55,6 +55,8 @@ import { fetchWeather, type WeatherData } from '../../services/weatherApi';
 import { showGroundGrid, hideGroundGrid, syncGridColors, disposeGroundGrid, disposeModelShadow, createModelShadow } from '../../babylon/GroundGrid';
 import { createTubeMeshes, updateTubeValue, disposeAllTubes, setTubeTheme, type TubeMap } from '../../babylon/TubeMeshFactory';
 import HUD from '../../components/HUD';
+import FloorSwitcher from '../../components/FloorSwitcher';
+import { createDemoHouse } from '../../babylon/DemoHouseFactory';
 import LightModal from '../../components/LightModal';
 import CoverModal from '../../components/CoverModal';
 import RemoteModal from '../../components/RemoteModal';
@@ -65,7 +67,7 @@ import SettingsModal from '../../components/SettingsModal';
 import GuidedTour from '../../components/GuidedTour/GuidedTour';
 import { dashboardTourSteps } from '../../components/GuidedTour/tourSteps';
 import CardPropertiesPanel from '../../components/SidePanel/CardPropertiesPanel';
-import { SIMULATION_CONFIG, SIMULATION_MODEL_URL } from '../../data/simulationData';
+import { SIMULATION_CONFIG, SIMULATION_MODEL_URL, DEMO_HOUSE_MODEL_ID } from '../../data/simulationData';
 import type { AppConfig, DisplayConfig, LightConfig, RemoteButton, HAState, CardLayout, SidePanelCard } from '../../types';
 import './Dashboard.css';
 
@@ -759,9 +761,11 @@ export default function Dashboard() {
     const myToken = ++buildTokenRef.current;
     const aborted = () => buildTokenRef.current !== myToken;
 
-    let modelBlob: Blob | null;
+    // The demo exterior is procedural — there is no GLB to fetch for it.
+    const proceduralHouse = simulationMode && floorCfg.modelId === DEMO_HOUSE_MODEL_ID;
+    let modelBlob: Blob | null = null;
     try {
-      modelBlob = await resolveFloorModel(floorCfg);
+      if (!proceduralHouse) modelBlob = await resolveFloorModel(floorCfg);
     } catch (e) {
       console.error('[Floor] Model load failed:', e);
       setModelStatus('failed');
@@ -769,7 +773,7 @@ export default function Dashboard() {
       return;
     }
     if (aborted()) return;
-    if (!modelBlob) {
+    if (!modelBlob && !proceduralHouse) {
       navigate('/onboarding');
       return;
     }
@@ -777,11 +781,14 @@ export default function Dashboard() {
     try {
       const renderAtLoad = getSetting('render');
       const showTexturesAtLoad = renderAtLoad.showTextures;
-      const result = await loadModel(ctx.scene, modelBlob, undefined, {
+      const styleAtLoad = {
         showTextures: showTexturesAtLoad,
         sketchColor: renderAtLoad.sketchColor,
         sketchSpecular: renderAtLoad.sketchSpecular,
-      });
+      };
+      const result = modelBlob
+        ? await loadModel(ctx.scene, modelBlob, undefined, styleAtLoad)
+        : createDemoHouse(ctx.scene, styleAtLoad);
       if (aborted()) return;
 
       ctx.camera.lowerRadiusLimit = result.diagonal * 0.27;
@@ -797,6 +804,16 @@ export default function Dashboard() {
         ctx.camera.alpha = savedPose.alpha;
         ctx.camera.beta = savedPose.beta;
         ctx.camera.radius = savedPose.radius;
+      } else if (isOverviewFloor(floorCfg)) {
+        // Exterior overview — 3/4 aerial view so facades, roof and garden read.
+        // Same heading as the top-down floors (+35°) to keep orientation familiar.
+        ctx.camera.target = centerTarget.clone();
+        ctx.camera.alpha = Tools.ToRadians(305);
+        ctx.camera.beta = Tools.ToRadians(55);
+        // Back off on portrait screens so the whole lot still fits horizontally
+        const cv = canvasRef.current;
+        const aspect = cv && cv.clientHeight > 0 ? cv.clientWidth / cv.clientHeight : 1.5;
+        ctx.camera.radius = result.diagonal * Math.max(1, 1.2 / aspect);
       } else {
         // Default / new-floor framing — top-down, centered on the model
         ctx.camera.target = centerTarget.clone();
@@ -896,7 +913,7 @@ export default function Dashboard() {
       setModelStatus('failed');
       setModelStatusColor('var(--red)');
     }
-  }, [resolveFloorModel, navigate, computeIdealRadius, seedFloorFromCache]);
+  }, [resolveFloorModel, navigate, computeIdealRadius, seedFloorFromCache, simulationMode]);
 
   /** Dispose the current floor's model + entities (keeps scene/camera/weather/HA alive). */
   const teardownFloor = useCallback(() => {
@@ -911,8 +928,16 @@ export default function Dashboard() {
     Object.keys(cameraMeshMapRef.current).forEach((id) => removeCameraMesh(ctx.scene, cameraMeshMapRef.current, id));
     for (const m of shadowWallMeshesRef.current) m.dispose();
     shadowWallMeshesRef.current = [];
-    // Dispose the full imported hierarchy (incl. __root__), not just solids.
+    // Dispose the full imported hierarchy (incl. __root__), not just solids,
+    // plus the model's own materials/textures (the shared cartoon material is
+    // only ever the *current* material, never the stored original).
+    const modelMats = new Set<Material>();
+    for (const m of importedMeshesRef.current) {
+      const orig = (m.metadata as { originalMaterial?: Material | null } | null)?.originalMaterial;
+      if (orig) modelMats.add(orig);
+    }
     for (const m of importedMeshesRef.current) m.dispose();
+    for (const mat of modelMats) mat.dispose(false, true);
     importedMeshesRef.current = [];
     modelMeshesRef.current = [];
     edgeOutlineRef.current?.dispose();
@@ -1920,9 +1945,11 @@ export default function Dashboard() {
         <canvas ref={canvasRef} />
 
         {floors.length > 1 && activeFloorId && (
-          <div className="floor-badge">
-            {floors.find((f) => f.id === activeFloorId)?.name ?? ''}
-          </div>
+          <FloorSwitcher
+            floors={floors}
+            activeFloorId={activeFloorId}
+            onSelect={(id) => switchFloorRef.current(id)}
+          />
         )}
 
         <div

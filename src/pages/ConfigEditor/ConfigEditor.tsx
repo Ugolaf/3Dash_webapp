@@ -67,7 +67,7 @@ import {
   rebuildAllStaircaseMeshes,
   type StaircaseMeshMap,
 } from '../../babylon/StaircaseMeshFactory';
-import { getActiveFloor, getFloors } from '../../utils/floors';
+import { getActiveFloor, getFloors, getNavFloors, isOverviewFloor } from '../../utils/floors';
 import { patchFloor, createEmptyFloor, floorNameMap } from './floorHelpers';
 import { arrayMove } from '@dnd-kit/sortable';
 import TubeList from '../../components/TubeList';
@@ -2192,11 +2192,13 @@ export default function ConfigEditor() {
 
   // --- Floor management handlers ---
 
-  const handleAddFloor = useCallback(() => {
+  const handleAddFloor = useCallback((kind: 'floor' | 'overview' = 'floor') => {
     const config = configRef.current;
     if (!config) return;
     const current = getFloors(config);
-    const nf = createEmptyFloor(`Floor ${current.length + 1}`, current.length);
+    const nf = kind === 'overview'
+      ? createEmptyFloor('Exterior', -1, 'overview')
+      : createEmptyFloor(`Floor ${current.length + 1}`, current.length);
     const updated = [...current, nf];
     configRef.current = { ...config, floors: updated };
     setFloors(updated);
@@ -2718,13 +2720,24 @@ export default function ConfigEditor() {
             onChange={(e) => switchEditFloor(e.target.value)}
             title="Floor being edited"
           >
-            {floors.map((f) => (
-              <option key={f.id} value={f.id}>{f.name}</option>
+            {getNavFloors(floors).map((f) => (
+              <option key={f.id} value={f.id}>
+                {isOverviewFloor(f) ? `⌂ ${f.name}` : f.name}
+              </option>
             ))}
           </select>
           <button className="floor-bar-btn" title="Upload this floor's model" onClick={() => floorFileRef.current?.click()}>⬆</button>
           <button className="floor-bar-btn" title="Rename floor" onClick={handleRenameFloor}>✎</button>
-          <button className="floor-bar-btn" title="Add floor" onClick={handleAddFloor}>+</button>
+          <button className="floor-bar-btn" title="Add floor" onClick={() => handleAddFloor()}>+</button>
+          {!floors.some(isOverviewFloor) && (
+            <button
+              className="floor-bar-btn"
+              title="Add exterior overview (whole house, roof, garden)"
+              onClick={() => handleAddFloor('overview')}
+            >
+              ⌂
+            </button>
+          )}
           <button className="floor-bar-btn" title="Delete floor" onClick={handleDeleteFloor}>&times;</button>
         </div>
 

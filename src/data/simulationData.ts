@@ -264,10 +264,82 @@ const UPSTAIRS_LIGHT_IDS = new Set([
 ]);
 const UPSTAIRS_GROUP_IDS = new Set([GROUP_BEDROOM, GROUP_BATHROOM]);
 
+/** Model key of the procedural demo exterior (see babylon/DemoHouseFactory). */
+export const DEMO_HOUSE_MODEL_ID = "sim-house";
+
+// Outdoor lights only exist on the exterior overview.
+const SIM_EXTERIOR_LIGHTS: LightConfig[] = [
+  {
+    entityId: "light.porch",
+    label: "Porch",
+    type: "toggle",
+    shape: "sphere",
+    size: { diameter: 0.18 },
+    position: { x: -1.65, y: 2.45, z: -10.42 },
+    warmth: 2700,
+    brightness: 1.5,
+    hitbox: { shape: "sphere", size: { diameter: 0.7 } },
+  },
+  {
+    entityId: "light.garden_path",
+    label: "Garden Path",
+    type: "toggle",
+    position: { x: -3.4, y: 1.0, z: -17.25 },
+    warmth: 3000,
+    brightness: 1.5,
+    parts: [
+      { shape: "sphere", size: { diameter: 0.22 }, position: { x: -3.4, y: 1.0, z: -15 } },
+      { shape: "sphere", size: { diameter: 0.22 }, position: { x: -3.4, y: 1.0, z: -19.5 } },
+    ],
+  },
+  {
+    entityId: "light.terrace",
+    label: "Terrace",
+    type: "dimmeable",
+    shape: "cube",
+    size: { width: 0.12, height: 0.12, depth: 0.6 },
+    position: { x: 0.08, y: 2.6, z: -6.1 },
+    warmth: 2900,
+    brightness: 2,
+    hitbox: { shape: "cube", size: { width: 0.5, height: 0.5, depth: 1 } },
+  },
+];
+
+// Exterior shutters: the floors' shutters (same HA entities, so state is
+// shared) placed on the facade, plus upstairs back windows only managed here.
+const SIM_EXTERIOR_COVERS: CoverConfig[] = [
+  ...SIM_COVERS.filter((c) => c.entityId !== "cover.bathroom_window"),
+  {
+    entityId: "cover.bathroom_window",
+    label: "Bathroom Window",
+    position: { x: 0, y: 4.85, z: -5.15 },
+    normal: { x: 1, y: 0, z: 0 },
+    width: 1.35,
+    height: 1.25,
+  },
+  {
+    entityId: "cover.bedroom_back",
+    label: "Bedroom (back)",
+    position: { x: -6.06, y: 4.6, z: -10.24 },
+    normal: { x: 0, y: 0, z: -1 },
+    width: 1.6,
+    height: 1.3,
+  },
+  {
+    entityId: "cover.office_back",
+    label: "Office (back)",
+    position: { x: -2.5, y: 4.6, z: -10.24 },
+    normal: { x: 0, y: 0, z: -1 },
+    width: 1.2,
+    height: 1.3,
+  },
+];
+
 /**
  * Premade config for simulation mode. Split into two floors that reuse the same
  * demo GLB (modelId "sim") so the multi-floor navigation can be demonstrated:
  * a staircase on each floor links to the other with a smooth fade transition.
+ * An exterior overview (procedural house + garden) is the landing view.
  */
 export const SIMULATION_CONFIG: AppConfig = {
   location: {
@@ -278,8 +350,17 @@ export const SIMULATION_CONFIG: AppConfig = {
   // Top-level entity arrays are unused when `floors` is present (getFloors
   // treats floors as authoritative); kept empty to satisfy AppConfig.
   lights: [],
-  activeFloorId: "ground",
+  activeFloorId: "outside",
   floors: [
+    {
+      id: "outside",
+      name: "Outside",
+      kind: "overview",
+      modelId: DEMO_HOUSE_MODEL_ID,
+      order: -1,
+      lights: SIM_EXTERIOR_LIGHTS,
+      covers: SIM_EXTERIOR_COVERS,
+    },
     {
       id: "ground",
       name: "Ground Floor",

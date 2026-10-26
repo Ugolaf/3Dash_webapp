@@ -1,0 +1,69 @@
+.floor-switcher {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  display: flex;
+  gap: 2px;
+  max-width: calc(100% - 32px);
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding: 3px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 85%, transparent);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(6px);
+}
+
+.floor-switcher::-webkit-scrollbar {
+  display: none;
+}
+
+.floor-switcher-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 5px 12px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.floor-switcher-btn:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+.floor-switcher-btn.active {
+  background: var(--text);
+  color: var(--surface);
+}
+
+/* Narrow desktop: the HUD title bar takes the top row, sit just below it */
+@media (min-width: 769px) and (max-width: 1024px) {
+  .floor-switcher {
+    top: 60px;
+  }
+}
+
+/* Mobile: the 3D view is only the area above the bottom sheet — stay compact */
+@media (max-width: 768px) {
+  .floor-switcher {
+    top: 40px;
+  }
+
+  .floor-switcher-btn {
+    padding: 4px 10px;
+    font-size: 11px;
+  }
+}
