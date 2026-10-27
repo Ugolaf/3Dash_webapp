@@ -18,6 +18,10 @@ Your browser may show a certificate warning on first visit -- this is normal (se
 
 - 3D floorplan with custom `.glb` models
 - Light control (on/off, dimmable, RGB, RGBW, IR remote)
+- Roller shutters with open/close/stop control
+- Multiple floors linked by staircases, plus an exterior overview (roof, garden, outdoor shutters and lights)
+- Dome cameras with live Home Assistant feeds
+- Alarm mode (scene blinks red while the alarm is triggered)
 - Wall displays with live sensor data
 - Animated network throughput tubes
 - Real-time sun positioning and weather effects

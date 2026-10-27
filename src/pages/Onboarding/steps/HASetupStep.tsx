@@ -86,7 +86,7 @@ export default function HASetupStep({ onComplete, initialHA }: Props) {
             No problem — host 3Dash directly on your HA server in a few clicks:
           </div>
           <a
-            href="https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fkdcius%2F3Dash_webapp"
+            href="https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fugolaf%2F3Dash_webapp"
             target="_blank"
             rel="noopener noreferrer"
             style={{ display: 'inline-block', marginTop: 8 }}

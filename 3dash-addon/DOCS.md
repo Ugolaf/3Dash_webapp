@@ -28,7 +28,15 @@ All configuration happens in the browser -- no files to edit manually.
 | Home Assistant connection | Onboarding wizard or Settings |
 | Location (for sun tracking) | Onboarding wizard or Settings |
 | Theme, rendering, camera | Settings modal |
-| Lights, displays, shadow walls, tubes | Config editor |
+| Alarm entity | Settings > Connection |
+| Floors, exterior overview, and their models | Config editor (floor bar) |
+| Lights, shutters, displays, cameras, staircases, shadow walls, tubes | Config editor |
+
+## Floors and exterior overview
+
+Each floor has its own `.glb` model. In the config editor, the floor bar adds (**+**), uploads a model for (**⬆**), renames (**✎**) or deletes (**×**) a floor. The **⌂** button adds an exterior overview: a model of the whole house, roof and garden on which you place outdoor shutters and lights. On the dashboard, the bar at the top switches between the overview and each floor.
+
+To drive several lamps from one click, enable **Multi-part** in the light form and add a part per lamp, then size the hitbox to cover them. Separate Home Assistant entities must first be grouped with a *light group* helper.
 
 ## SSL / HTTPS
 
@@ -36,8 +44,8 @@ When running behind HTTPS, the add-on automatically uses `wss://` for the WebSoc
 
 ## Backup and restore
 
-You can export your full configuration (lights, displays, settings, and 3D model) as a ZIP file from the settings panel. Use this to back up your setup or transfer it to another instance.
+You can export your full configuration (floors, entities, settings, and every floor's 3D model) as a ZIP file from the settings panel. Use this to back up your setup or transfer it to another instance.
 
 ## Support
 
-For issues and feature requests, visit the [GitHub repository](https://github.com/kdcius/3Dash_webapp).
+For issues and feature requests, visit the [GitHub repository](https://github.com/ugolaf/3Dash_webapp).

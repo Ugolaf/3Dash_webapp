@@ -5,12 +5,17 @@ A 3D floorplan dashboard for [Home Assistant](https://www.home-assistant.io/). L
 ## Features
 
 - **3D floorplan** -- load a custom `.glb` model of your home and navigate it freely
-- **Light control** -- toggle, dim, and color-pick lights directly from the 3D scene (supports on/off, dimmable, RGB, RGBW, and IR remote types)
+- **Light control** -- toggle, dim, and color-pick lights directly from the 3D scene (supports on/off, dimmable, RGB, RGBW, and IR remote types); one light can be drawn as several parts (e.g. two garden lamps driven by one entity)
+- **Roller shutters** -- animated covers on your windows, with open/close/stop control and sun-shadow blocking
+- **Multiple floors** -- one model per floor, linked by clickable staircases
+- **Exterior overview** -- a 3/4 aerial view of the whole house (roof, garden) to control outdoor shutters and lights; a top bar jumps to any floor
+- **Cameras** -- place dome cameras in the scene and open their live Home Assistant feed
+- **Alarm mode** -- the whole scene blinks red while a chosen Home Assistant alarm entity is triggered
 - **Wall displays** -- render live sensor data (temperature, humidity, energy, etc.) on surfaces inside the model
 - **Network tubes** -- animated tubes that visualize real-time network throughput
 - **Sun and weather** -- sun position tracks your real location; optional rain/snow particle effects
 - **Side panel** -- configurable cards for scripts, indicators, and graphs
-- **Config editor** -- define lights, displays, shadow walls, and tubes from a built-in UI
+- **Config editor** -- define floors, lights, shutters, displays, cameras, staircases, shadow walls, and tubes from a built-in UI
 - **Onboarding wizard** -- guided setup for first-time users
 - **Backup / restore** -- export and import your full configuration as a ZIP
 - **Demo mode** -- explore the dashboard without a Home Assistant instance
@@ -25,7 +30,7 @@ React, TypeScript, Babylon.js, Vite, Home Assistant WebSocket API.
 
 ### Option 1 -- GitHub hosted version
 
-Use the hosted version directly at **https://kdcius.github.io/3Dash_webapp/**.
+Use the hosted version directly at **https://ugolaf.github.io/3Dash_webapp/**.
 
 No installation required. Your Home Assistant instance must be accessible over HTTPS for the WebSocket connection to work from the hosted page.
 
@@ -33,13 +38,13 @@ No installation required. Your Home Assistant instance must be accessible over H
 
 The easiest way to self-host. Runs on the same machine as your Home Assistant instance.
 
-[![Add repository to Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fkdcius%2F3Dash_webapp)
+[![Add repository to Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fugolaf%2F3Dash_webapp)
 
 Or manually:
 
 1. In Home Assistant, go to **Settings > Add-ons > Add-on Store**.
 2. Open the overflow menu and select **Repositories**.
-3. Add `https://github.com/kdcius/3Dash_webapp`.
+3. Add `https://github.com/ugolaf/3Dash_webapp`.
 4. Install **3Dash** from the store and start it.
 5. Open `http://<your-ha-ip>:8099` in your browser.
 
@@ -50,7 +55,7 @@ Or manually:
 For advanced users who want to build and serve 3Dash themselves.
 
 ```bash
-git clone https://github.com/kdcius/3Dash_webapp.git
+git clone https://github.com/ugolaf/3Dash_webapp.git
 cd 3Dash_webapp
 npm ci
 npm run build
@@ -67,9 +72,22 @@ All configuration happens in the browser -- no config files to edit manually.
 | Home Assistant URL, port, and token | Onboarding wizard or Settings |
 | Location (for sun tracking) | Onboarding wizard or Settings |
 | Theme, rendering, camera | Settings modal |
-| Lights, displays, shadow walls, tubes | Config editor |
+| Alarm entity | Settings > Connection |
+| Floors, exterior overview, and their models | Config editor (floor bar) |
+| Lights, shutters, displays, cameras, staircases, shadow walls, tubes | Config editor |
 
-Configuration is persisted in `localStorage`. The 3D model is stored in `IndexedDB`.
+Configuration is persisted in `localStorage`. The 3D models (one per floor) are stored in `IndexedDB`.
+
+### Floors and exterior overview
+
+In the config editor, the floor bar at the top of the sidebar manages floors:
+
+- **+** adds a floor, **⬆** uploads its `.glb` model, **✎** renames it, **×** deletes it.
+- **⌂** adds the exterior overview: upload a model of the whole house (roof, garden) and place outdoor shutters and lights on it like on any floor. It opens in a 3/4 aerial view and is listed first.
+
+On the dashboard, the bar at the top switches between the overview and each floor; staircases placed on a floor also switch floors when clicked. A shutter configured on both a floor and the overview with the same entity ID stays in sync.
+
+**Several lamps, one entity:** in the light form, enable **Shape > Multi-part** and use **+ Add Part** for each lamp, then size the **Hitbox** so it covers all of them (the parts themselves are not clickable). If the lamps are separate Home Assistant entities, group them first with a Home Assistant *light group* helper and configure the group.
 
 ## Project structure
 
@@ -81,7 +99,7 @@ src/
   services/      HA WebSocket client, config/settings persistence, storage
   contexts/      React contexts (demo mode, camera, theme)
   types/         TypeScript type definitions
-  utils/         Color conversion helpers
+  utils/         Color conversion and floor helpers
 public/          Static assets (default 3D model, fonts, icons, PWA manifests)
 3dash-addon/     Home Assistant add-on (Dockerfile, nginx config, run script)
 ```
