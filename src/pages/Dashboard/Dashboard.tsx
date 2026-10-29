@@ -36,9 +36,16 @@ import {
   type CameraMeshMap,
 } from '../../babylon/CameraMeshFactory';
 import CameraModal from '../../components/CameraModal';
+import ClimateModal from '../../components/ClimateModal';
+import {
+  createClimateMesh,
+  removeClimateMesh,
+  applyClimateState,
+  type ClimateMeshMap,
+} from '../../babylon/ClimateMeshFactory';
 import { getConfig, updateConfig, getModelBlob } from '../../services/configApi';
-import { getActiveFloor, getFloors, isOverviewFloor, collectAllEntityIds, findLightConfig, findCoverConfig, findDisplayConfig, findTubeConfig, findCameraConfig } from '../../utils/floors';
-import type { FloorConfig, CameraConfig } from '../../types';
+import { getActiveFloor, getFloors, isOverviewFloor, collectAllEntityIds, findLightConfig, findCoverConfig, findDisplayConfig, findTubeConfig, findCameraConfig, findClimateConfig } from '../../utils/floors';
+import type { FloorConfig, CameraConfig, ClimateConfig } from '../../types';
 import { getEntityCache, setEntityCache } from '../../services/entityCache';
 import type { HAEntityOption } from '../../components/EntityPicker';
 import { getSetting, updateSettings, type HomeViewPose } from '../../services/settingsStore';
@@ -119,6 +126,10 @@ export default function Dashboard() {
   const [cameraModalConfig, setCameraModalConfig] = useState<CameraConfig | null>(null);
   const [cameraModalState, setCameraModalState] = useState<HAState | null>(null);
 
+  const [climateModalVisible, setClimateModalVisible] = useState(false);
+  const [climateModalConfig, setClimateModalConfig] = useState<ClimateConfig | null>(null);
+  const [climateModalState, setClimateModalState] = useState<HAState | null>(null);
+
   /** True while the configured HA alarm entity is in an active state. */
   const [alarmActive, setAlarmActive] = useState(false);
 
@@ -179,6 +190,7 @@ export default function Dashboard() {
   // ── Multi-floor state ──────────────────────────────────────────
   const staircaseMapRef = useRef<StaircaseMeshMap>({});
   const cameraMeshMapRef = useRef<CameraMeshMap>({});
+  const climateMeshMapRef = useRef<ClimateMeshMap>({});
   /** Every mesh imported by loadModel (incl. __root__) — disposed on teardown. */
   const importedMeshesRef = useRef<AbstractMesh[]>([]);
   /** Shadow-wall meshes for the current floor — disposed on teardown. */
@@ -730,6 +742,24 @@ export default function Dashboard() {
     return getModelBlob(floorCfg.modelId);
   }, [simulationMode]);
 
+  /** Update every climate unit bound to this entity (several units may share one). */
+  const applyClimateFor = useCallback((entityId: string, state: HAState) => {
+    const scene = sceneCtxRef.current?.scene;
+    if (!scene) return;
+    for (const entry of Object.values(climateMeshMapRef.current)) {
+      if (entry.config.entityId === entityId) applyClimateState(scene, entry, state);
+    }
+  }, []);
+
+  /** Apply the cached state to every climate unit on the current floor. */
+  const applyClimateStates = useCallback(() => {
+    const scene = sceneCtxRef.current?.scene;
+    if (!scene) return;
+    for (const entry of Object.values(climateMeshMapRef.current)) {
+      applyClimateState(scene, entry, lastStatesRef.current[entry.config.entityId]);
+    }
+  }, []);
+
   /** Replay cached HA states onto the freshly-built floor's meshes. */
   const seedFloorFromCache = useCallback((floorCfg: FloorConfig) => {
     const states = lastStatesRef.current;
@@ -746,7 +776,8 @@ export default function Dashboard() {
     for (const [entityId, state] of Object.entries(states)) {
       updateTubeValue(tubeMapRef.current, entityId, state.state);
     }
-  }, [applyLightState, applyCoverState]);
+    applyClimateStates();
+  }, [applyLightState, applyCoverState, applyClimateStates]);
 
   /**
    * Build a floor: load its model and create all of its entity meshes,
@@ -900,6 +931,11 @@ export default function Dashboard() {
         cameraMeshMapRef.current[cam.id] = createCameraMesh(ctx.scene, cam);
       }
 
+      // Climate units (clickable split ACs → climate modal, airflow particles)
+      for (const cl of floorCfg.climates || []) {
+        climateMeshMapRef.current[cl.id] = createClimateMesh(ctx.scene, cl);
+      }
+
       // Weather: create once, re-point the cloud-shadow generator on later floors
       if (!weatherRef.current) {
         weatherRef.current = createWeatherEffects(ctx.scene, sunShadowGen ?? undefined);
@@ -926,6 +962,7 @@ export default function Dashboard() {
     disposeAllTubes(tubeMapRef.current);
     Object.keys(staircaseMapRef.current).forEach((id) => removeStaircaseMesh(ctx.scene, staircaseMapRef.current, id));
     Object.keys(cameraMeshMapRef.current).forEach((id) => removeCameraMesh(ctx.scene, cameraMeshMapRef.current, id));
+    Object.keys(climateMeshMapRef.current).forEach((id) => removeClimateMesh(ctx.scene, climateMeshMapRef.current, id));
     for (const m of shadowWallMeshesRef.current) m.dispose();
     shadowWallMeshesRef.current = [];
     // Dispose the full imported hierarchy (incl. __root__), not just solids,
@@ -1070,11 +1107,12 @@ export default function Dashboard() {
       let pressedTubeId: string | null = null;
       let pressedStaircaseId: string | null = null;
       let pressedCameraId: string | null = null;
+      let pressedClimateId: string | null = null;
 
       ctx.scene.onPointerDown = (evt, pickResult) => {
         if (evt.button > 0) return;
         if (!pickResult.hit || !pickResult.pickedMesh) return;
-        const meta = pickResult.pickedMesh.metadata as { entityId?: string; displayId?: string; tubeId?: string; staircaseId?: string; cameraId?: string } | null;
+        const meta = pickResult.pickedMesh.metadata as { entityId?: string; displayId?: string; tubeId?: string; staircaseId?: string; cameraId?: string; climateId?: string } | null;
 
         // Staircase click — immediate floor switch, no long-press
         if (meta?.staircaseId) {
@@ -1087,6 +1125,14 @@ export default function Dashboard() {
         // Camera click — immediate feed open, no long-press
         if (meta?.cameraId) {
           pressedCameraId = meta.cameraId;
+          pressStartX = evt.clientX;
+          pressStartY = evt.clientY;
+          return;
+        }
+
+        // Climate click — immediate modal open, no long-press
+        if (meta?.climateId) {
+          pressedClimateId = meta.climateId;
           pressStartX = evt.clientX;
           pressStartY = evt.clientY;
           return;
@@ -1140,6 +1186,17 @@ export default function Dashboard() {
             openCameraModal(pressedCameraId);
           }
           pressedCameraId = null;
+          return;
+        }
+
+        // Handle climate tap → open climate modal
+        if (pressedClimateId) {
+          const dx = _evt.clientX - pressStartX;
+          const dy = _evt.clientY - pressStartY;
+          if (dx * dx + dy * dy <= MOVE_THRESHOLD * MOVE_THRESHOLD) {
+            openClimateModal(pressedClimateId);
+          }
+          pressedClimateId = null;
           return;
         }
 
@@ -1219,6 +1276,13 @@ export default function Dashboard() {
           const dy = _evt.clientY - pressStartY;
           if (dx * dx + dy * dy > MOVE_THRESHOLD * MOVE_THRESHOLD) {
             pressedCameraId = null;
+          }
+        }
+        if (pressedClimateId) {
+          const dx = _evt.clientX - pressStartX;
+          const dy = _evt.clientY - pressStartY;
+          if (dx * dx + dy * dy > MOVE_THRESHOLD * MOVE_THRESHOLD) {
+            pressedClimateId = null;
           }
         }
         if (pressedDisplayId) {
@@ -1307,6 +1371,8 @@ export default function Dashboard() {
         if (coverMeshMapRef.current[entityId]) applyCoverState(entityId, state);
         if (entityId === coverModalEntityIdRef.current) setCoverModalState(state);
         if (entityId === cameraModalEntityIdRef.current) setCameraModalState(state);
+        if (entityId === climateModalEntityIdRef.current) setClimateModalState(state);
+        applyClimateFor(entityId, state);
         if (entityId === modalEntityIdRef.current) setModalState(state);
         if (entityId === modalDoubleTapEntityIdRef.current) setModalDoubleTapState(state);
         if (entityId === remoteModalEntityIdRef.current) setRemoteModalState(state);
@@ -1361,6 +1427,7 @@ export default function Dashboard() {
           }
           if (meshMapRef.current[state.entity_id]) applyLightState(state.entity_id, state);
           if (coverMeshMapRef.current[state.entity_id]) applyCoverState(state.entity_id, state);
+          applyClimateFor(state.entity_id, state);
           if (panelEntities.has(state.entity_id)) newCardStates[state.entity_id] = state;
         });
         if (Object.keys(newCardStates).length > 0) {
@@ -1399,6 +1466,10 @@ export default function Dashboard() {
         for (const s of d.sources) {
           if (!sensorIds.includes(s.entityId)) sensorIds.push(s.entityId);
         }
+      }
+      // Climate units get fake climate entities (modes, fan, swing) in demo mode
+      for (const cl of allEntities.climates) {
+        if (!sensorIds.includes(cl.entityId)) sensorIds.push(cl.entityId);
       }
       // Include tube sensor entity IDs (union across floors) in demo mode
       for (const t of allEntities.tubes) {
@@ -1446,6 +1517,8 @@ export default function Dashboard() {
   coverModalEntityIdRef.current = coverModalEntityId;
   const cameraModalEntityIdRef = useRef<string | null>(null);
   cameraModalEntityIdRef.current = cameraModalConfig?.entityId ?? null;
+  const climateModalEntityIdRef = useRef<string | null>(null);
+  climateModalEntityIdRef.current = climateModalConfig?.entityId ?? null;
 
   const openModal = useCallback((entityId: string) => {
     const config = configRef.current;
@@ -1540,6 +1613,35 @@ export default function Dashboard() {
     setCameraModalVisible(false);
     setCameraModalConfig(null);
     setCameraModalState(null);
+  }, []);
+
+  const openClimateModal = useCallback((climateId: string) => {
+    const config = configRef.current;
+    if (!config) return;
+    const cl = findClimateConfig(config, climateId);
+    if (!cl) return;
+    setClimateModalConfig(cl);
+    setClimateModalState(lastStatesRef.current[cl.entityId] || null);
+    setClimateModalVisible(true);
+  }, []);
+
+  const handleClimateModalClose = useCallback(() => {
+    setClimateModalVisible(false);
+    setClimateModalConfig(null);
+    setClimateModalState(null);
+  }, []);
+
+  const handleSetHvacMode = useCallback((entityId: string, mode: string) => {
+    haRef.current?.callService('climate', 'set_hvac_mode', entityId, { hvac_mode: mode });
+  }, []);
+  const handleSetClimateTemperature = useCallback((entityId: string, temperature: number) => {
+    haRef.current?.callService('climate', 'set_temperature', entityId, { temperature });
+  }, []);
+  const handleSetFanMode = useCallback((entityId: string, mode: string) => {
+    haRef.current?.callService('climate', 'set_fan_mode', entityId, { fan_mode: mode });
+  }, []);
+  const handleSetSwingMode = useCallback((entityId: string, mode: string) => {
+    haRef.current?.callService('climate', 'set_swing_mode', entityId, { swing_mode: mode });
   }, []);
 
   const handleRemoteModalClose = useCallback(() => {
@@ -2032,6 +2134,17 @@ export default function Dashboard() {
           state={cameraModalState}
           demo={simulationMode || demoMode}
           onClose={handleCameraModalClose}
+        />
+
+        <ClimateModal
+          visible={climateModalVisible}
+          climate={climateModalConfig}
+          state={climateModalState}
+          onClose={handleClimateModalClose}
+          onSetHvacMode={handleSetHvacMode}
+          onSetTemperature={handleSetClimateTemperature}
+          onSetFanMode={handleSetFanMode}
+          onSetSwingMode={handleSetSwingMode}
         />
 
         <RemoteModal

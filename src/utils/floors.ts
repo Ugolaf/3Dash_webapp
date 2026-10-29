@@ -6,6 +6,7 @@ import type {
   DisplayConfig,
   TubeConfig,
   CameraConfig,
+  ClimateConfig,
 } from '../types';
 
 /**
@@ -29,6 +30,7 @@ export function getFloors(config: AppConfig): FloorConfig[] {
       tubes: config.tubes,
       staircases: [],
       cameras: [],
+      climates: [],
     },
   ];
 }
@@ -102,12 +104,22 @@ export function findCameraConfig(config: AppConfig, id: string): CameraConfig | 
   return undefined;
 }
 
+/** Find a climate unit config by its config id across all floors. */
+export function findClimateConfig(config: AppConfig, id: string): ClimateConfig | undefined {
+  for (const floor of getFloors(config)) {
+    const hit = floor.climates?.find((c) => c.id === id);
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
 export interface CollectedEntities {
   lights: LightConfig[];
   covers: CoverConfig[];
   displays: DisplayConfig[];
   tubes: TubeConfig[];
   cameras: CameraConfig[];
+  climates: ClimateConfig[];
 }
 
 /**
@@ -122,11 +134,13 @@ export function collectAllEntityIds(config: AppConfig): CollectedEntities {
   const displays: DisplayConfig[] = [];
   const tubes: TubeConfig[] = [];
   const cameras: CameraConfig[] = [];
+  const climates: ClimateConfig[] = [];
   const seenLights = new Set<string>();
   const seenCovers = new Set<string>();
   const seenDisplays = new Set<string>();
   const seenTubes = new Set<string>();
   const seenCameras = new Set<string>();
+  const seenClimates = new Set<string>();
 
   for (const floor of floors) {
     for (const l of floor.lights ?? []) {
@@ -144,7 +158,10 @@ export function collectAllEntityIds(config: AppConfig): CollectedEntities {
     for (const cam of floor.cameras ?? []) {
       if (!seenCameras.has(cam.entityId)) { seenCameras.add(cam.entityId); cameras.push(cam); }
     }
+    for (const cl of floor.climates ?? []) {
+      if (!seenClimates.has(cl.entityId)) { seenClimates.add(cl.entityId); climates.push(cl); }
+    }
   }
 
-  return { lights, covers, displays, tubes, cameras };
+  return { lights, covers, displays, tubes, cameras, climates };
 }

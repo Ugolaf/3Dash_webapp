@@ -20,6 +20,7 @@ Your browser may show a certificate warning on first visit -- this is normal (se
 - Light control (on/off, dimmable, RGB, RGBW, IR remote)
 - Roller shutters with open/close/stop control
 - Multiple floors linked by staircases, plus an exterior overview (roof, garden, outdoor shutters and lights)
+- Climate units (split AC) with mode, temperature, fan and swing control and animated airflow
 - Dome cameras with live Home Assistant feeds
 - Alarm mode (scene blinks red while the alarm is triggered)
 - Wall displays with live sensor data

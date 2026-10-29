@@ -30,6 +30,7 @@ export function createEmptyFloor(
     shadowWalls: [],
     tubes: [],
     staircases: [],
+    climates: [],
   };
 }
 

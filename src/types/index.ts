@@ -96,6 +96,19 @@ export interface CameraConfig {
   tilt?: number;
 }
 
+// --- Climate (wall-mounted split AC units) ---
+
+export interface ClimateConfig {
+  id: string;
+  /** HA climate entity ID (e.g. climate.living_room). */
+  entityId: string;
+  label: string;
+  /** Mount point on the wall (world coordinates): center of the unit's back face. */
+  position: LightPosition;
+  /** Yaw in radians — the unit's front (and its airflow) faces local +Z. Default 0. */
+  rotationY?: number;
+}
+
 // --- Shadow Walls (invisible roof / sun blockers) ---
 
 export interface ShadowWallConfig {
@@ -221,6 +234,7 @@ export interface FloorConfig {
   tubes?: TubeConfig[];
   staircases?: StaircaseConfig[];
   cameras?: CameraConfig[];
+  climates?: ClimateConfig[];
 }
 
 export interface AppConfig {

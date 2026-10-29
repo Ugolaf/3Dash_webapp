@@ -4,6 +4,40 @@ import { isSimulationActive } from "../contexts/SimulationModeContext";
 
 const STORAGE_KEY = "demoLightStates";
 
+/** Starting point for demo split ACs (any climate.* not listed falls back to "cool"). */
+const DEMO_CLIMATES: Record<string, { mode: string; current: number; target: number }> = {
+  "climate.living_room": { mode: "cool", current: 24.5, target: 22 },
+  "climate.bedroom": { mode: "heat", current: 18.5, target: 21 },
+};
+
+/** Which way an auto/heat_cool unit is running, like a real thermostat would report. */
+function demoHvacAction(mode: string, current: number, target: number): string {
+  switch (mode) {
+    case "off": return "off";
+    case "heat": return "heating";
+    case "cool": return "cooling";
+    case "dry": return "drying";
+    case "fan_only": return "fan";
+    default: return current < target ? "heating" : "cooling";
+  }
+}
+
+function demoClimateAttributes(mode: string, current: number, target: number): Record<string, unknown> {
+  return {
+    hvac_modes: ["off", "heat", "cool", "heat_cool", "dry", "fan_only"],
+    fan_modes: ["auto", "low", "medium", "high"],
+    swing_modes: ["off", "vertical"],
+    fan_mode: "auto",
+    swing_mode: "off",
+    current_temperature: current,
+    temperature: target,
+    min_temp: 16,
+    max_temp: 30,
+    target_temp_step: 0.5,
+    hvac_action: demoHvacAction(mode, current, target),
+  };
+}
+
 function loadPersistedStates(): Record<string, HAState> {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -174,6 +208,15 @@ export class DemoHAConnection {
       },
     };
     for (const id of sensorEntityIds) {
+      if (id.startsWith("climate.") && !sensorDefaults[id]) {
+        const c = DEMO_CLIMATES[id] ?? { mode: "cool", current: 24, target: 22 };
+        this.states.set(id, {
+          entity_id: id,
+          state: c.mode,
+          attributes: demoClimateAttributes(c.mode, c.current, c.target),
+        });
+        continue;
+      }
       const defaults = sensorDefaults[id];
       this.states.set(id, {
         entity_id: id,
@@ -231,13 +274,32 @@ export class DemoHAConnection {
     if (domain === "climate") {
       const current = this.states.get(entityId);
       const attrs = { ...(current?.attributes ?? {}) };
+      let mode = current?.state ?? "heat";
       if (service === "set_temperature" && data?.temperature !== undefined) {
         attrs.temperature = data.temperature;
-        this.updateState(entityId, current?.state ?? "heat", attrs);
       } else if (service === "set_hvac_mode" && data?.hvac_mode !== undefined) {
         attrs.hvac_mode = data.hvac_mode;
-        this.updateState(entityId, data.hvac_mode as string, attrs);
+        mode = data.hvac_mode as string;
+      } else if (service === "set_fan_mode" && data?.fan_mode !== undefined) {
+        attrs.fan_mode = data.fan_mode;
+      } else if (service === "set_swing_mode" && data?.swing_mode !== undefined) {
+        attrs.swing_mode = data.swing_mode;
+      } else if (service === "turn_off") {
+        mode = "off";
+      } else if (service === "turn_on" && mode === "off") {
+        mode = "cool";
+      } else {
+        return;
       }
+      // Only units created with an action (split ACs) report hvac_action
+      if ("hvac_action" in attrs) {
+        attrs.hvac_action = demoHvacAction(
+          mode,
+          Number(attrs.current_temperature ?? 21),
+          Number(attrs.temperature ?? 21),
+        );
+      }
+      this.updateState(entityId, mode, attrs);
       return;
     }
 

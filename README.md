@@ -9,13 +9,14 @@ A 3D floorplan dashboard for [Home Assistant](https://www.home-assistant.io/). L
 - **Roller shutters** -- animated covers on your windows, with open/close/stop control and sun-shadow blocking
 - **Multiple floors** -- one model per floor, linked by clickable staircases
 - **Exterior overview** -- a 3/4 aerial view of the whole house (roof, garden) to control outdoor shutters and lights; a top bar jumps to any floor
+- **Climate** -- wall-mounted split AC units; click one to set its mode, target temperature, fan speed and swing; while running it blows animated warm (heat) or cold (cool) air
 - **Cameras** -- place dome cameras in the scene and open their live Home Assistant feed
 - **Alarm mode** -- the whole scene blinks red while a chosen Home Assistant alarm entity is triggered
 - **Wall displays** -- render live sensor data (temperature, humidity, energy, etc.) on surfaces inside the model
 - **Network tubes** -- animated tubes that visualize real-time network throughput
 - **Sun and weather** -- sun position tracks your real location; optional rain/snow particle effects
 - **Side panel** -- configurable cards for scripts, indicators, and graphs
-- **Config editor** -- define floors, lights, shutters, displays, cameras, staircases, shadow walls, and tubes from a built-in UI
+- **Config editor** -- define floors, lights, shutters, displays, cameras, climate units, staircases, shadow walls, and tubes from a built-in UI
 - **Onboarding wizard** -- guided setup for first-time users
 - **Backup / restore** -- export and import your full configuration as a ZIP
 - **Demo mode** -- explore the dashboard without a Home Assistant instance
@@ -74,7 +75,7 @@ All configuration happens in the browser -- no config files to edit manually.
 | Theme, rendering, camera | Settings modal |
 | Alarm entity | Settings > Connection |
 | Floors, exterior overview, and their models | Config editor (floor bar) |
-| Lights, shutters, displays, cameras, staircases, shadow walls, tubes | Config editor |
+| Lights, shutters, displays, cameras, climate units, staircases, shadow walls, tubes | Config editor |
 
 Configuration is persisted in `localStorage`. The 3D models (one per floor) are stored in `IndexedDB`.
 

@@ -30,7 +30,7 @@ All configuration happens in the browser -- no files to edit manually.
 | Theme, rendering, camera | Settings modal |
 | Alarm entity | Settings > Connection |
 | Floors, exterior overview, and their models | Config editor (floor bar) |
-| Lights, shutters, displays, cameras, staircases, shadow walls, tubes | Config editor |
+| Lights, shutters, displays, cameras, climate units, staircases, shadow walls, tubes | Config editor |
 
 ## Floors and exterior overview
 

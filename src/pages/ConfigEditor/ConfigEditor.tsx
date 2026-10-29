@@ -48,6 +48,14 @@ import StaircaseList from '../../components/StaircaseList';
 import StaircaseForm, { type StaircasePreviewInfo } from '../../components/StaircaseForm';
 import CameraList from '../../components/CameraList';
 import CameraForm, { type CameraOrientation } from '../../components/CameraForm';
+import ClimateList from '../../components/ClimateList';
+import ClimateForm from '../../components/ClimateForm';
+import {
+  createClimateMesh,
+  removeClimateMesh,
+  rebuildAllClimateMeshes,
+  type ClimateMeshMap,
+} from '../../babylon/ClimateMeshFactory';
 import {
   createCameraMesh,
   removeCameraMesh,
@@ -75,7 +83,7 @@ import TubeForm, { type TubePreviewInfo } from '../../components/TubeForm';
 import { createTubeMeshes, removeTubeMeshes, disposeAllTubes, renderMockupLabels, type TubeMap } from '../../babylon/TubeMeshFactory';
 import GuidedTour from '../../components/GuidedTour/GuidedTour';
 import { editorTourSteps } from '../../components/GuidedTour/tourSteps';
-import type { LightConfig, LightGroup, DisplayConfig, ShadowWallConfig, CoverConfig, TubeConfig, StaircaseConfig, CameraConfig, FloorConfig, AppConfig, LightPosition, HAState } from '../../types';
+import type { LightConfig, LightGroup, DisplayConfig, ShadowWallConfig, CoverConfig, TubeConfig, StaircaseConfig, CameraConfig, ClimateConfig, FloorConfig, AppConfig, LightPosition, HAState } from '../../types';
 import './ConfigEditor.css';
 
 export default function ConfigEditor() {
@@ -118,7 +126,7 @@ export default function ConfigEditor() {
   const [toastVisible, setToastVisible] = useState(false);
 
   // Editor mode: lights, displays, covers, walls, or tubes
-  const [editorMode, setEditorMode] = useState<'lights' | 'displays' | 'covers' | 'walls' | 'tubes' | 'stairs' | 'cameras'>('lights');
+  const [editorMode, setEditorMode] = useState<'lights' | 'displays' | 'covers' | 'walls' | 'tubes' | 'stairs' | 'cameras' | 'climate'>('lights');
 
   // Full config + multi-floor editing state
   const configRef = useRef<AppConfig | null>(null);
@@ -231,6 +239,20 @@ export default function ConfigEditor() {
   const cameraOrientRef = useRef(cameraOrient);
   cameraOrientRef.current = cameraOrient;
   const cameraPreviewIdRef = useRef<string | null>(null);
+
+  // Climate units (split ACs)
+  const climateMeshMapRef = useRef<ClimateMeshMap>({});
+  const [climates, setClimates] = useState<ClimateConfig[]>([]);
+  const [climateEditIdx, setClimateEditIdx] = useState<number | null>(null);
+  const [climatePanelOpen, setClimatePanelOpen] = useState(false);
+  const climatePanelOpenRef = useRef(climatePanelOpen);
+  climatePanelOpenRef.current = climatePanelOpen;
+  const climatesRef = useRef(climates);
+  climatesRef.current = climates;
+  const [climateRotation, setClimateRotation] = useState(0);
+  const climateRotationRef = useRef(climateRotation);
+  climateRotationRef.current = climateRotation;
+  const climatePreviewIdRef = useRef<string | null>(null);
 
   // Current preview shape/size from LightForm
   const previewInfoRef = useRef<PreviewInfo>({ shape: 'sphere', size: { diameter: 0.25 } });
@@ -571,6 +593,7 @@ export default function ConfigEditor() {
     disposeAllTubes(tubeMeshMapRef.current);
     Object.keys(staircaseMeshMapRef.current).forEach((id) => removeStaircaseMesh(ctx.scene, staircaseMeshMapRef.current, id));
     Object.keys(cameraMeshMapRef.current).forEach((id) => removeCameraMesh(ctx.scene, cameraMeshMapRef.current, id));
+    Object.keys(climateMeshMapRef.current).forEach((id) => removeClimateMesh(ctx.scene, climateMeshMapRef.current, id));
     for (const m of editorModelMeshesRef.current) m.dispose();
     editorModelMeshesRef.current = [];
     editorEdgeRef.current?.dispose();
@@ -585,6 +608,7 @@ export default function ConfigEditor() {
     setTubes(floorCfg.tubes || []); tubesRef.current = floorCfg.tubes || [];
     setStaircases(floorCfg.staircases || []); staircasesRef.current = floorCfg.staircases || [];
     setCameras(floorCfg.cameras || []); camerasRef.current = floorCfg.cameras || [];
+    setClimates(floorCfg.climates || []); climatesRef.current = floorCfg.climates || [];
 
     // Load the floor's model
     const modelBlob = await getModelBlob(floorCfg.modelId);
@@ -623,6 +647,7 @@ export default function ConfigEditor() {
     renderMockupLabels(tubeMeshMapRef.current);
     rebuildAllStaircaseMeshes(ctx.scene, staircaseMeshMapRef.current, floorCfg.staircases || []);
     rebuildAllCameraMeshes(ctx.scene, cameraMeshMapRef.current, floorCfg.cameras || []);
+    rebuildAllClimateMeshes(ctx.scene, climateMeshMapRef.current, floorCfg.climates || []);
   }, [computeIdealRadius, showToast]);
 
   /** Switch which floor is being edited (persists nothing — edits auto-save). */
@@ -636,6 +661,7 @@ export default function ConfigEditor() {
     exitPlacingMode();
     setPanelOpen(false); setDisplayPanelOpen(false); setCoverPanelOpen(false);
     setWallPanelOpen(false); setTubePanelOpen(false); setStaircasePanelOpen(false); setCameraPanelOpen(false);
+    setClimatePanelOpen(false); setClimateEditIdx(null);
     setEditIdx(null); setDisplayEditIdx(null); setCoverEditIdx(null);
     setWallEditIdx(null); setTubeEditIdx(null); setStaircaseEditIdx(null); setCameraEditIdx(null);
     setEditFloorId(floorId);
@@ -765,6 +791,22 @@ export default function ConfigEditor() {
           };
           setPosition(newPos);
           positionRef.current = newPos;
+        } else if (climatePanelOpenRef.current) {
+          // Climate placing mode: mount on the clicked wall, facing into the room
+          // (interior face normal, flattened — the unit's front is local +Z).
+          const faceNormal = placePick.getNormal(true, true);
+          if (faceNormal && Math.hypot(faceNormal.x, faceNormal.z) > 0.3) {
+            const yaw = parseFloat(Math.atan2(faceNormal.x, faceNormal.z).toFixed(4));
+            setClimateRotation(yaw);
+            climateRotationRef.current = yaw;
+          }
+          const newPos: LightPosition = {
+            x: parseFloat(p.x.toFixed(3)),
+            y: parseFloat(p.y.toFixed(3)),
+            z: parseFloat(p.z.toFixed(3)),
+          };
+          setPosition(newPos);
+          positionRef.current = newPos;
         } else if (wallPanelOpenRef.current || staircasePanelOpenRef.current) {
           // Wall / staircase placing mode: exact position, no offset
           const newPos: LightPosition = {
@@ -834,7 +876,7 @@ export default function ConfigEditor() {
         return;
       }
       // Skip click-to-edit when already editing another entity
-      if (displayPanelOpenRef.current || coverPanelOpenRef.current || wallPanelOpenRef.current || tubePanelOpenRef.current || staircasePanelOpenRef.current || cameraPanelOpenRef.current) return;
+      if (displayPanelOpenRef.current || coverPanelOpenRef.current || wallPanelOpenRef.current || tubePanelOpenRef.current || staircasePanelOpenRef.current || cameraPanelOpenRef.current || climatePanelOpenRef.current) return;
 
       // Pick under pointer
       const pick = ctx.scene.pick(evt.offsetX, evt.offsetY);
@@ -889,6 +931,15 @@ export default function ConfigEditor() {
           handleEditCameraRef.current(idx);
         }
       }
+
+      // Click on a climate unit to edit it
+      if (pick.pickedMesh?.metadata?.climateId) {
+        const clickedId = pick.pickedMesh.metadata.climateId;
+        const idx = climatesRef.current.findIndex((c) => c.id === clickedId);
+        if (idx !== -1) {
+          handleEditClimateRef.current(idx);
+        }
+      }
     };
 
     init();
@@ -910,6 +961,9 @@ export default function ConfigEditor() {
       );
       Object.keys(cameraMeshMapRef.current).forEach((id) =>
         removeCameraMesh(ctx.scene, cameraMeshMapRef.current, id),
+      );
+      Object.keys(climateMeshMapRef.current).forEach((id) =>
+        removeClimateMesh(ctx.scene, climateMeshMapRef.current, id),
       );
       clearPreview();
       for (const m of wallEditorMeshesRef.current) m.dispose();
@@ -981,7 +1035,7 @@ export default function ConfigEditor() {
 
       // Ctrl+Z undo (must check before the modifier guard)
       if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
-        if (!panelOpenRef.current && !displayPanelOpenRef.current && !coverPanelOpenRef.current && !wallPanelOpenRef.current && !tubePanelOpenRef.current && !staircasePanelOpenRef.current && !cameraPanelOpenRef.current) return;
+        if (!panelOpenRef.current && !displayPanelOpenRef.current && !coverPanelOpenRef.current && !wallPanelOpenRef.current && !tubePanelOpenRef.current && !staircasePanelOpenRef.current && !cameraPanelOpenRef.current && !climatePanelOpenRef.current) return;
         const stack = posUndoStackRef.current;
         if (stack.length === 0) return;
         e.preventDefault();
@@ -1088,6 +1142,11 @@ export default function ConfigEditor() {
         if (cameraPanelOpenRef.current) {
           e.preventDefault();
           handleCloseCameraPanelRef.current();
+          return;
+        }
+        if (climatePanelOpenRef.current) {
+          e.preventDefault();
+          handleCloseClimatePanelRef.current();
           return;
         }
       }
@@ -2190,6 +2249,186 @@ export default function ConfigEditor() {
     rebuildCameraPreview();
   }, [position, cameraOrient, cameraPanelOpen, rebuildCameraPreview]);
 
+  // --- Climate handlers ---
+
+  const handleAddClimate = useCallback(() => {
+    setClimateEditIdx(null);
+    setPosition({ x: 0, y: 2.2, z: 0 });
+    setClimateRotation(0);
+    climateRotationRef.current = 0;
+    posUndoStackRef.current = [];
+    setClimatePanelOpen(true);
+  }, []);
+
+  const handleEditClimate = useCallback(
+    (idx: number) => {
+      const cfg = climates[idx];
+      setClimateEditIdx(idx);
+      setPosition(cfg.position);
+      setClimateRotation(cfg.rotationY ?? 0);
+      climateRotationRef.current = cfg.rotationY ?? 0;
+      posUndoStackRef.current = [];
+      setClimatePanelOpen(true);
+    },
+    [climates],
+  );
+  const handleEditClimateRef = useRef(handleEditClimate);
+  handleEditClimateRef.current = handleEditClimate;
+
+  const handleDeleteClimate = useCallback(
+    (idx: number) => {
+      const scene = sceneCtxRef.current?.scene;
+      if (!scene) return;
+      removeClimateMesh(scene, climateMeshMapRef.current, climates[idx].id);
+      const updated = climates.filter((_, i) => i !== idx);
+      setClimates(updated);
+      climatesRef.current = updated;
+      persistActiveFloor({ climates: updated });
+      showToast('Climate unit deleted');
+    },
+    [climates, persistActiveFloor, showToast],
+  );
+
+  const handleDuplicateClimate = useCallback(
+    (idx: number) => {
+      const scene = sceneCtxRef.current?.scene;
+      if (!scene) return;
+      const src = climates[idx];
+      const copy: ClimateConfig = {
+        ...src,
+        id: generateUUID(),
+        label: (src.label || src.entityId) + ' (copy)',
+        position: { ...src.position, x: parseFloat((src.position.x + 1).toFixed(3)) },
+      };
+      const updated = [...climates, copy];
+      setClimates(updated);
+      climatesRef.current = updated;
+      rebuildAllClimateMeshes(scene, climateMeshMapRef.current, updated);
+      persistActiveFloor({ climates: updated });
+      showToast('Climate unit duplicated');
+    },
+    [climates, persistActiveFloor, showToast],
+  );
+
+  const handleCloseClimatePanel = useCallback(() => {
+    const scene = sceneCtxRef.current?.scene;
+    if (climatePreviewIdRef.current && scene) {
+      removeClimateMesh(scene, climateMeshMapRef.current, climatePreviewIdRef.current);
+      climatePreviewIdRef.current = null;
+    }
+    if (scene && climateEditIdx !== null) {
+      const cfg = climatesRef.current[climateEditIdx];
+      if (cfg) climateMeshMapRef.current[cfg.id] = createClimateMesh(scene, cfg);
+    }
+    setClimatePanelOpen(false);
+    clearPreview();
+    exitPlacingMode();
+    setClimateEditIdx(null);
+  }, [clearPreview, exitPlacingMode, climateEditIdx]);
+  const handleCloseClimatePanelRef = useRef(handleCloseClimatePanel);
+  handleCloseClimatePanelRef.current = handleCloseClimatePanel;
+
+  // Live preview climate unit + move gizmo on its root node
+  const rebuildClimatePreview = useCallback(() => {
+    const scene = sceneCtxRef.current?.scene;
+    if (!scene) return;
+
+    const editingCfg = climatesRef.current[climateEditIdx ?? -1];
+    const previewId = editingCfg?.id || '__climate_preview__';
+    const oldPreviewId = climatePreviewIdRef.current;
+    if (oldPreviewId) {
+      removeClimateMesh(scene, climateMeshMapRef.current, oldPreviewId);
+    } else if (previewId !== '__climate_preview__') {
+      removeClimateMesh(scene, climateMeshMapRef.current, previewId);
+    }
+    climatePreviewIdRef.current = previewId;
+
+    const tempCfg: ClimateConfig = {
+      id: previewId,
+      entityId: '',
+      label: '',
+      position: positionRef.current,
+      rotationY: climateRotationRef.current,
+    };
+    const entry = createClimateMesh(scene, tempCfg);
+    entry.hitbox.metadata = { previewTarget: 'climate' };
+    climateMeshMapRef.current[previewId] = entry;
+
+    if (gizmoRef.current) {
+      gizmoRef.current.dispose();
+      gizmoRef.current = null;
+    }
+    if (!utilLayerRef.current) {
+      utilLayerRef.current = new UtilityLayerRenderer(scene);
+    }
+    const gizmo = new PositionGizmo(utilLayerRef.current);
+    gizmo.scaleRatio = 1.2;
+    gizmo.updateGizmoRotationToMatchAttachedMesh = false;
+    gizmo.attachedNode = entry.root;
+
+    const onDragStart = () => {
+      draggingGizmoRef.current = true;
+      posUndoStackRef.current.push({ ...positionRef.current });
+    };
+    const onDrag = () => {
+      const p = entry.root.position;
+      const newPos: LightPosition = {
+        x: parseFloat(p.x.toFixed(3)),
+        y: parseFloat(p.y.toFixed(3)),
+        z: parseFloat(p.z.toFixed(3)),
+      };
+      positionRef.current = newPos;
+      setPosition(newPos);
+    };
+    const onDragEnd = () => {
+      draggingGizmoRef.current = false;
+      document.dispatchEvent(new Event('tour:gizmo-used'));
+      setPosition({ ...positionRef.current });
+    };
+    for (const ax of [gizmo.xGizmo, gizmo.yGizmo, gizmo.zGizmo]) {
+      ax.dragBehavior.onDragStartObservable.add(onDragStart);
+      ax.dragBehavior.onDragObservable.add(onDrag);
+      ax.dragBehavior.onDragEndObservable.add(onDragEnd);
+    }
+    for (const m of utilLayerRef.current!.utilityLayerScene.meshes) {
+      if (m.material) {
+        (m.material as StandardMaterial).alpha = 0.5;
+      }
+    }
+    gizmoRef.current = gizmo;
+  }, [climateEditIdx]);
+
+  const handleSaveClimate = useCallback(
+    (cfg: ClimateConfig) => {
+      const scene = sceneCtxRef.current?.scene;
+      if (!scene) return;
+      if (climatePreviewIdRef.current) {
+        removeClimateMesh(scene, climateMeshMapRef.current, climatePreviewIdRef.current);
+        climatePreviewIdRef.current = null;
+      }
+      const updated = climateEditIdx !== null
+        ? climates.map((c, i) => (i === climateEditIdx ? cfg : c))
+        : [...climates, cfg];
+      setClimates(updated);
+      climatesRef.current = updated;
+      clearPreview();
+      rebuildAllClimateMeshes(scene, climateMeshMapRef.current, updated);
+      setClimatePanelOpen(false);
+      exitPlacingMode();
+      setClimateEditIdx(null);
+      persistActiveFloor({ climates: updated });
+      showToast('Climate unit saved');
+    },
+    [climates, climateEditIdx, clearPreview, exitPlacingMode, persistActiveFloor, showToast],
+  );
+
+  // Rebuild climate preview when position or facing changes (skip during gizmo drag)
+  useEffect(() => {
+    if (!climatePanelOpen) return;
+    if (draggingGizmoRef.current) return;
+    rebuildClimatePreview();
+  }, [position, climateRotation, climatePanelOpen, rebuildClimatePreview]);
+
   // --- Floor management handlers ---
 
   const handleAddFloor = useCallback((kind: 'floor' | 'overview' = 'floor') => {
@@ -2665,12 +2904,12 @@ export default function ConfigEditor() {
   const handleSaveConfig = useCallback(async () => {
     try {
       // The current editor arrays belong to the active floor.
-      persistActiveFloor({ lights, lightGroups, displays, covers, shadowWalls, tubes, staircases, cameras });
+      persistActiveFloor({ lights, lightGroups, displays, covers, shadowWalls, tubes, staircases, cameras, climates });
       showToast(`Saved floor "${floors.find((f) => f.id === editFloorId)?.name ?? ''}" (${lights.length} lights, ${covers.length} covers, ${cameras.length} cams)`);
     } catch (e) {
       alert('Failed to save config: ' + (e instanceof Error ? e.message : e));
     }
-  }, [lights, lightGroups, displays, covers, shadowWalls, tubes, staircases, cameras, floors, editFloorId, persistActiveFloor, showToast]);
+  }, [lights, lightGroups, displays, covers, shadowWalls, tubes, staircases, cameras, climates, floors, editFloorId, persistActiveFloor, showToast]);
 
   // Reload config from storage and rebuild the current floor
   const handleLoadConfig = useCallback(async () => {
@@ -2791,6 +3030,13 @@ export default function ConfigEditor() {
           >
             Cameras ({cameras.length})
           </button>
+          <button
+            className={`editor-tab${editorMode === 'climate' ? ' active' : ''}`}
+            data-tab="climate"
+            onClick={() => setEditorMode('climate')}
+          >
+            Climate ({climates.length})
+          </button>
         </div>
 
         <div className="light-list">
@@ -2849,13 +3095,21 @@ export default function ConfigEditor() {
               onDelete={handleDeleteStaircase}
               onDuplicate={handleDuplicateStaircase}
             />
-          ) : (
+          ) : editorMode === 'cameras' ? (
             <CameraList
               cameras={cameras}
               selectedIdx={cameraEditIdx}
               onSelect={handleEditCamera}
               onDelete={handleDeleteCamera}
               onDuplicate={handleDuplicateCamera}
+            />
+          ) : (
+            <ClimateList
+              climates={climates}
+              selectedIdx={climateEditIdx}
+              onSelect={handleEditClimate}
+              onDelete={handleDeleteClimate}
+              onDuplicate={handleDuplicateClimate}
             />
           )}
         </div>
@@ -2890,9 +3144,13 @@ export default function ConfigEditor() {
             >
               + Add Staircase
             </button>
-          ) : (
+          ) : editorMode === 'cameras' ? (
             <button className="btn btn-primary editor-add-btn" onClick={handleAddCamera}>
               + Add Camera
+            </button>
+          ) : (
+            <button className="btn btn-primary editor-add-btn" onClick={handleAddClimate}>
+              + Add Climate
             </button>
           )}
           <button className="btn btn-ghost" onClick={handleLoadConfig}>
@@ -2908,7 +3166,7 @@ export default function ConfigEditor() {
       <div className="canvas-area editor-canvas">
         <canvas ref={canvasRef} />
         <div className={`mode-banner${placingMode ? ' visible' : ''}`}>
-          {displayPanelOpen ? 'Click on a wall surface to place display' : coverPanelOpen ? 'Click the center of a window to place the shutter' : wallPanelOpen ? 'Click on the model to place wall' : staircasePanelOpen ? 'Click an open spot on the floor to place the staircase' : cameraPanelOpen ? 'Click a ceiling spot to mount the camera' : 'Click on the model to place light'}
+          {displayPanelOpen ? 'Click on a wall surface to place display' : coverPanelOpen ? 'Click the center of a window to place the shutter' : wallPanelOpen ? 'Click on the model to place wall' : staircasePanelOpen ? 'Click an open spot on the floor to place the staircase' : cameraPanelOpen ? 'Click a ceiling spot to mount the camera' : climatePanelOpen ? 'Click a wall to mount the climate unit' : 'Click on the model to place light'}
         </div>
         <div className="coord-readout">{coordText}</div>
         <div className={`toast${toastVisible ? ' show' : ''}`}>{toastMsg}</div>
@@ -3005,6 +3263,21 @@ export default function ConfigEditor() {
           onOrientationChange={setCameraOrient}
           onSave={handleSaveCamera}
           onClose={handleCloseCameraPanel}
+          onEnterPlacingMode={enterPlacingMode}
+          onExitPlacingMode={exitPlacingMode}
+          placingMode={placingMode}
+          haEntities={haEntities}
+        />
+
+        <ClimateForm
+          open={climatePanelOpen}
+          editClimate={climateEditIdx !== null ? climates[climateEditIdx] : null}
+          position={position}
+          rotationY={climateRotation}
+          onPositionChange={handlePositionChange}
+          onRotationChange={setClimateRotation}
+          onSave={handleSaveClimate}
+          onClose={handleCloseClimatePanel}
           onEnterPlacingMode={enterPlacingMode}
           onExitPlacingMode={exitPlacingMode}
           placingMode={placingMode}

@@ -360,6 +360,17 @@ export const SIMULATION_CONFIG: AppConfig = {
       order: -1,
       lights: SIM_EXTERIOR_LIGHTS,
       covers: SIM_EXTERIOR_COVERS,
+      // Same entity as the living-room unit, so the demo's landing view already
+      // shows a running AC and both stay in sync.
+      climates: [
+        {
+          id: "sim-ac-outside",
+          entityId: "climate.living_room",
+          label: "Living Room AC",
+          position: { x: 0, y: 2.2, z: -4.6 },
+          rotationY: Math.PI / 2,
+        },
+      ],
     },
     {
       id: "ground",
@@ -400,6 +411,15 @@ export const SIMULATION_CONFIG: AppConfig = {
           tilt: Math.PI / 2,
         },
       ],
+      climates: [
+        {
+          id: "sim-ac-living",
+          entityId: "climate.living_room",
+          label: "Living Room AC",
+          position: { x: -8.257, y: 2.3, z: -7.5 },
+          rotationY: Math.PI / 2,
+        },
+      ],
     },
     {
       id: "upstairs",
@@ -428,6 +448,15 @@ export const SIMULATION_CONFIG: AppConfig = {
           label: "Bedroom",
           position: { x: -2.6, y: 2.85, z: -2.6 },
           rotationY: 0,
+        },
+      ],
+      climates: [
+        {
+          id: "sim-ac-bedroom",
+          entityId: "climate.bedroom",
+          label: "Bedroom AC",
+          position: { x: -0.25, y: 2.3, z: -1.2 },
+          rotationY: -Math.PI / 2,
         },
       ],
     },
