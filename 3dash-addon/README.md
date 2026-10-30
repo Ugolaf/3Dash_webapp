@@ -21,6 +21,7 @@ Your browser may show a certificate warning on first visit -- this is normal (se
 - Roller shutters with open/close/stop control
 - Multiple floors linked by staircases, plus an exterior overview (roof, garden, outdoor shutters and lights)
 - Climate units (split AC) with mode, temperature, fan and swing control and animated airflow
+- Room temperature labels from HA sensors, color-coded by comfort, with history graph
 - Dome cameras with live Home Assistant feeds
 - Alarm mode (scene blinks red while the alarm is triggered)
 - Wall displays with live sensor data
