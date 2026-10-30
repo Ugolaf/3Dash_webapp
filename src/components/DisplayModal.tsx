@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { DisplayConfig, HAState, HAHistoryPoint } from '../types';
-import { fetchHistory, generateDemoHistory } from '../services/haHistoryApi';
-import { useDemoMode } from '../contexts/DemoModeContext';
+import { fetchHistory } from '../services/haHistoryApi';
 import LucideIcon from './SidePanel/cards/LucideIcon';
 import './SidePanel/cards/IndicatorModal.css';
 
@@ -58,23 +57,19 @@ interface Props {
 }
 
 /** Graph section for a single sensor source. */
-function SensorGraph({ entityId, label, unit, precision }: {
+export function SensorGraph({ entityId, label, unit, precision }: {
   entityId: string;
   label?: string;
   unit?: string;
   precision?: number;
 }) {
-  const { demoMode } = useDemoMode();
   const [period, setPeriod] = useState<string>('24h');
   const [points, setPoints] = useState<HAHistoryPoint[]>([]);
   const [error, setError] = useState(false);
 
+  // Demo/simulation connections answer history requests with synthetic data
+  // centered on the entity's live value, so one path covers every mode.
   useEffect(() => {
-    if (demoMode) {
-      setPoints(generateDemoHistory(period));
-      setError(false);
-      return;
-    }
     let cancelled = false;
     const load = async () => {
       try {
@@ -86,7 +81,7 @@ function SensorGraph({ entityId, label, unit, precision }: {
     };
     load();
     return () => { cancelled = true; };
-  }, [entityId, period, demoMode]);
+  }, [entityId, period]);
 
   const numericPoints = points
     .map(p => ({ value: parseFloat(p.state), time: new Date(p.last_changed).getTime() }))

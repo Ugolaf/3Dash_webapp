@@ -371,6 +371,15 @@ export const SIMULATION_CONFIG: AppConfig = {
           rotationY: Math.PI / 2,
         },
       ],
+      roomSensors: [
+        {
+          id: "sim-room-garden",
+          label: "Garden",
+          temperatureEntityId: "sensor.garden_temperature",
+          position: { x: 4, y: 0, z: -1.5 },
+          tintRadius: 2,
+        },
+      ],
     },
     {
       id: "ground",
@@ -420,6 +429,17 @@ export const SIMULATION_CONFIG: AppConfig = {
           rotationY: Math.PI / 2,
         },
       ],
+      roomSensors: [
+        {
+          id: "sim-room-living",
+          label: "Living room",
+          temperatureEntityId: "sensor.living_room_temperature",
+          humidityEntityId: "sensor.living_room_humidity",
+          position: { x: -6.5, y: 0.26, z: -4.8 },
+          tintRadius: 1.8,
+          climateId: "sim-ac-living",
+        },
+      ],
     },
     {
       id: "upstairs",
@@ -457,6 +477,17 @@ export const SIMULATION_CONFIG: AppConfig = {
           label: "Bedroom AC",
           position: { x: -0.25, y: 2.3, z: -1.2 },
           rotationY: -Math.PI / 2,
+        },
+      ],
+      roomSensors: [
+        {
+          id: "sim-room-bedroom",
+          label: "Bedroom",
+          temperatureEntityId: "sensor.bedroom_temperature",
+          humidityEntityId: "sensor.bedroom_humidity",
+          position: { x: -1.0, y: 0.26, z: -1.8 },
+          tintRadius: 1.4,
+          climateId: "sim-ac-bedroom",
         },
       ],
     },

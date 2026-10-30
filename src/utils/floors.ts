@@ -7,6 +7,7 @@ import type {
   TubeConfig,
   CameraConfig,
   ClimateConfig,
+  RoomSensorConfig,
 } from '../types';
 
 /**
@@ -31,6 +32,7 @@ export function getFloors(config: AppConfig): FloorConfig[] {
       staircases: [],
       cameras: [],
       climates: [],
+      roomSensors: [],
     },
   ];
 }
@@ -113,6 +115,15 @@ export function findClimateConfig(config: AppConfig, id: string): ClimateConfig 
   return undefined;
 }
 
+/** Find a room sensor config by its config id across all floors. */
+export function findRoomSensorConfig(config: AppConfig, id: string): RoomSensorConfig | undefined {
+  for (const floor of getFloors(config)) {
+    const hit = floor.roomSensors?.find((r) => r.id === id);
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
 export interface CollectedEntities {
   lights: LightConfig[];
   covers: CoverConfig[];
@@ -120,6 +131,7 @@ export interface CollectedEntities {
   tubes: TubeConfig[];
   cameras: CameraConfig[];
   climates: ClimateConfig[];
+  roomSensors: RoomSensorConfig[];
 }
 
 /**
@@ -135,6 +147,7 @@ export function collectAllEntityIds(config: AppConfig): CollectedEntities {
   const tubes: TubeConfig[] = [];
   const cameras: CameraConfig[] = [];
   const climates: ClimateConfig[] = [];
+  const roomSensors: RoomSensorConfig[] = [];
   const seenLights = new Set<string>();
   const seenCovers = new Set<string>();
   const seenDisplays = new Set<string>();
@@ -161,7 +174,9 @@ export function collectAllEntityIds(config: AppConfig): CollectedEntities {
     for (const cl of floor.climates ?? []) {
       if (!seenClimates.has(cl.entityId)) { seenClimates.add(cl.entityId); climates.push(cl); }
     }
+    // Keyed by config id: each label has its own sensors, and ids never collide across floors
+    roomSensors.push(...(floor.roomSensors ?? []));
   }
 
-  return { lights, covers, displays, tubes, cameras, climates };
+  return { lights, covers, displays, tubes, cameras, climates, roomSensors };
 }

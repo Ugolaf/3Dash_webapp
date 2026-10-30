@@ -43,9 +43,16 @@ import {
   applyClimateState,
   type ClimateMeshMap,
 } from '../../babylon/ClimateMeshFactory';
+import RoomSensorModal from '../../components/RoomSensorModal';
+import {
+  createRoomSensorMesh,
+  removeRoomSensorMesh,
+  applyRoomSensorState,
+  type RoomSensorMeshMap,
+} from '../../babylon/RoomSensorMeshFactory';
 import { getConfig, updateConfig, getModelBlob } from '../../services/configApi';
-import { getActiveFloor, getFloors, isOverviewFloor, collectAllEntityIds, findLightConfig, findCoverConfig, findDisplayConfig, findTubeConfig, findCameraConfig, findClimateConfig } from '../../utils/floors';
-import type { FloorConfig, CameraConfig, ClimateConfig } from '../../types';
+import { getActiveFloor, getFloors, isOverviewFloor, collectAllEntityIds, findLightConfig, findCoverConfig, findDisplayConfig, findTubeConfig, findCameraConfig, findClimateConfig, findRoomSensorConfig } from '../../utils/floors';
+import type { FloorConfig, CameraConfig, ClimateConfig, RoomSensorConfig } from '../../types';
 import { getEntityCache, setEntityCache } from '../../services/entityCache';
 import type { HAEntityOption } from '../../components/EntityPicker';
 import { getSetting, updateSettings, type HomeViewPose } from '../../services/settingsStore';
@@ -130,6 +137,10 @@ export default function Dashboard() {
   const [climateModalConfig, setClimateModalConfig] = useState<ClimateConfig | null>(null);
   const [climateModalState, setClimateModalState] = useState<HAState | null>(null);
 
+  const [roomModalVisible, setRoomModalVisible] = useState(false);
+  const [roomModalConfig, setRoomModalConfig] = useState<RoomSensorConfig | null>(null);
+  const [roomModalStates, setRoomModalStates] = useState<{ temp: HAState | null; humidity: HAState | null }>({ temp: null, humidity: null });
+
   /** True while the configured HA alarm entity is in an active state. */
   const [alarmActive, setAlarmActive] = useState(false);
 
@@ -191,6 +202,7 @@ export default function Dashboard() {
   const staircaseMapRef = useRef<StaircaseMeshMap>({});
   const cameraMeshMapRef = useRef<CameraMeshMap>({});
   const climateMeshMapRef = useRef<ClimateMeshMap>({});
+  const roomSensorMeshMapRef = useRef<RoomSensorMeshMap>({});
   /** Every mesh imported by loadModel (incl. __root__) — disposed on teardown. */
   const importedMeshesRef = useRef<AbstractMesh[]>([]);
   /** Shadow-wall meshes for the current floor — disposed on teardown. */
@@ -760,6 +772,16 @@ export default function Dashboard() {
     }
   }, []);
 
+  /** Redraw every room label reading this entity (temperature or humidity). */
+  const applyRoomSensorsFor = useCallback((entityId: string) => {
+    const states = lastStatesRef.current;
+    for (const entry of Object.values(roomSensorMeshMapRef.current)) {
+      const { temperatureEntityId, humidityEntityId } = entry.config;
+      if (temperatureEntityId !== entityId && humidityEntityId !== entityId) continue;
+      applyRoomSensorState(entry, states[temperatureEntityId], humidityEntityId ? states[humidityEntityId] : undefined);
+    }
+  }, []);
+
   /** Replay cached HA states onto the freshly-built floor's meshes. */
   const seedFloorFromCache = useCallback((floorCfg: FloorConfig) => {
     const states = lastStatesRef.current;
@@ -777,6 +799,10 @@ export default function Dashboard() {
       updateTubeValue(tubeMapRef.current, entityId, state.state);
     }
     applyClimateStates();
+    for (const entry of Object.values(roomSensorMeshMapRef.current)) {
+      const { temperatureEntityId, humidityEntityId } = entry.config;
+      applyRoomSensorState(entry, states[temperatureEntityId], humidityEntityId ? states[humidityEntityId] : undefined);
+    }
   }, [applyLightState, applyCoverState, applyClimateStates]);
 
   /**
@@ -936,6 +962,11 @@ export default function Dashboard() {
         climateMeshMapRef.current[cl.id] = createClimateMesh(ctx.scene, cl);
       }
 
+      // Room sensors (floating temperature labels → history modal)
+      for (const rs of floorCfg.roomSensors || []) {
+        roomSensorMeshMapRef.current[rs.id] = createRoomSensorMesh(ctx.scene, rs);
+      }
+
       // Weather: create once, re-point the cloud-shadow generator on later floors
       if (!weatherRef.current) {
         weatherRef.current = createWeatherEffects(ctx.scene, sunShadowGen ?? undefined);
@@ -963,6 +994,7 @@ export default function Dashboard() {
     Object.keys(staircaseMapRef.current).forEach((id) => removeStaircaseMesh(ctx.scene, staircaseMapRef.current, id));
     Object.keys(cameraMeshMapRef.current).forEach((id) => removeCameraMesh(ctx.scene, cameraMeshMapRef.current, id));
     Object.keys(climateMeshMapRef.current).forEach((id) => removeClimateMesh(ctx.scene, climateMeshMapRef.current, id));
+    Object.keys(roomSensorMeshMapRef.current).forEach((id) => removeRoomSensorMesh(roomSensorMeshMapRef.current, id));
     for (const m of shadowWallMeshesRef.current) m.dispose();
     shadowWallMeshesRef.current = [];
     // Dispose the full imported hierarchy (incl. __root__), not just solids,
@@ -1108,11 +1140,12 @@ export default function Dashboard() {
       let pressedStaircaseId: string | null = null;
       let pressedCameraId: string | null = null;
       let pressedClimateId: string | null = null;
+      let pressedRoomSensorId: string | null = null;
 
       ctx.scene.onPointerDown = (evt, pickResult) => {
         if (evt.button > 0) return;
         if (!pickResult.hit || !pickResult.pickedMesh) return;
-        const meta = pickResult.pickedMesh.metadata as { entityId?: string; displayId?: string; tubeId?: string; staircaseId?: string; cameraId?: string; climateId?: string } | null;
+        const meta = pickResult.pickedMesh.metadata as { entityId?: string; displayId?: string; tubeId?: string; staircaseId?: string; cameraId?: string; climateId?: string; roomSensorId?: string } | null;
 
         // Staircase click — immediate floor switch, no long-press
         if (meta?.staircaseId) {
@@ -1125,6 +1158,14 @@ export default function Dashboard() {
         // Camera click — immediate feed open, no long-press
         if (meta?.cameraId) {
           pressedCameraId = meta.cameraId;
+          pressStartX = evt.clientX;
+          pressStartY = evt.clientY;
+          return;
+        }
+
+        // Room label click — immediate modal open, no long-press
+        if (meta?.roomSensorId) {
+          pressedRoomSensorId = meta.roomSensorId;
           pressStartX = evt.clientX;
           pressStartY = evt.clientY;
           return;
@@ -1197,6 +1238,17 @@ export default function Dashboard() {
             openClimateModal(pressedClimateId);
           }
           pressedClimateId = null;
+          return;
+        }
+
+        // Handle room label tap → open temperature modal
+        if (pressedRoomSensorId) {
+          const dx = _evt.clientX - pressStartX;
+          const dy = _evt.clientY - pressStartY;
+          if (dx * dx + dy * dy <= MOVE_THRESHOLD * MOVE_THRESHOLD) {
+            openRoomSensorModal(pressedRoomSensorId);
+          }
+          pressedRoomSensorId = null;
           return;
         }
 
@@ -1283,6 +1335,13 @@ export default function Dashboard() {
           const dy = _evt.clientY - pressStartY;
           if (dx * dx + dy * dy > MOVE_THRESHOLD * MOVE_THRESHOLD) {
             pressedClimateId = null;
+          }
+        }
+        if (pressedRoomSensorId) {
+          const dx = _evt.clientX - pressStartX;
+          const dy = _evt.clientY - pressStartY;
+          if (dx * dx + dy * dy > MOVE_THRESHOLD * MOVE_THRESHOLD) {
+            pressedRoomSensorId = null;
           }
         }
         if (pressedDisplayId) {
@@ -1373,6 +1432,11 @@ export default function Dashboard() {
         if (entityId === cameraModalEntityIdRef.current) setCameraModalState(state);
         if (entityId === climateModalEntityIdRef.current) setClimateModalState(state);
         applyClimateFor(entityId, state);
+        lastStatesRef.current[entityId] = state;
+        applyRoomSensorsFor(entityId);
+        const room = roomModalConfigRef.current;
+        if (room?.temperatureEntityId === entityId) setRoomModalStates((prev) => ({ ...prev, temp: state }));
+        if (room?.humidityEntityId === entityId) setRoomModalStates((prev) => ({ ...prev, humidity: state }));
         if (entityId === modalEntityIdRef.current) setModalState(state);
         if (entityId === modalDoubleTapEntityIdRef.current) setModalDoubleTapState(state);
         if (entityId === remoteModalEntityIdRef.current) setRemoteModalState(state);
@@ -1430,6 +1494,7 @@ export default function Dashboard() {
           applyClimateFor(state.entity_id, state);
           if (panelEntities.has(state.entity_id)) newCardStates[state.entity_id] = state;
         });
+        for (const state of states) applyRoomSensorsFor(state.entity_id);
         if (Object.keys(newCardStates).length > 0) {
           setCardStates(prev => ({ ...prev, ...newCardStates }));
         }
@@ -1470,6 +1535,11 @@ export default function Dashboard() {
       // Climate units get fake climate entities (modes, fan, swing) in demo mode
       for (const cl of allEntities.climates) {
         if (!sensorIds.includes(cl.entityId)) sensorIds.push(cl.entityId);
+      }
+      for (const rs of allEntities.roomSensors) {
+        for (const id of [rs.temperatureEntityId, rs.humidityEntityId]) {
+          if (id && !sensorIds.includes(id)) sensorIds.push(id);
+        }
       }
       // Include tube sensor entity IDs (union across floors) in demo mode
       for (const t of allEntities.tubes) {
@@ -1519,6 +1589,8 @@ export default function Dashboard() {
   cameraModalEntityIdRef.current = cameraModalConfig?.entityId ?? null;
   const climateModalEntityIdRef = useRef<string | null>(null);
   climateModalEntityIdRef.current = climateModalConfig?.entityId ?? null;
+  const roomModalConfigRef = useRef<RoomSensorConfig | null>(null);
+  roomModalConfigRef.current = roomModalConfig;
 
   const openModal = useCallback((entityId: string) => {
     const config = configRef.current;
@@ -1630,6 +1702,38 @@ export default function Dashboard() {
     setClimateModalConfig(null);
     setClimateModalState(null);
   }, []);
+
+  const openRoomSensorModal = useCallback((roomId: string) => {
+    const config = configRef.current;
+    if (!config) return;
+    const rs = findRoomSensorConfig(config, roomId);
+    if (!rs) return;
+    const states = lastStatesRef.current;
+    setRoomModalConfig(rs);
+    setRoomModalStates({
+      temp: states[rs.temperatureEntityId] || null,
+      humidity: rs.humidityEntityId ? states[rs.humidityEntityId] || null : null,
+    });
+    setRoomModalVisible(true);
+  }, []);
+
+  const handleRoomModalClose = useCallback(() => {
+    setRoomModalVisible(false);
+    setRoomModalConfig(null);
+  }, []);
+
+  /** Swap the room modal for the linked climate unit's controls. */
+  const handleRoomOpenClimate = useCallback((climateId: string) => {
+    handleRoomModalClose();
+    openClimateModal(climateId);
+  }, [handleRoomModalClose, openClimateModal]);
+
+  const roomClimateLabel = useMemo(() => {
+    const config = configRef.current;
+    if (!config || !roomModalConfig?.climateId) return undefined;
+    const cl = findClimateConfig(config, roomModalConfig.climateId);
+    return cl ? cl.label || cl.entityId : undefined;
+  }, [roomModalConfig]);
 
   const handleSetHvacMode = useCallback((entityId: string, mode: string) => {
     haRef.current?.callService('climate', 'set_hvac_mode', entityId, { hvac_mode: mode });
@@ -2145,6 +2249,16 @@ export default function Dashboard() {
           onSetTemperature={handleSetClimateTemperature}
           onSetFanMode={handleSetFanMode}
           onSetSwingMode={handleSetSwingMode}
+        />
+
+        <RoomSensorModal
+          visible={roomModalVisible}
+          room={roomModalConfig}
+          temperatureState={roomModalStates.temp}
+          humidityState={roomModalStates.humidity}
+          climateLabel={roomClimateLabel}
+          onOpenClimate={handleRoomOpenClimate}
+          onClose={handleRoomModalClose}
         />
 
         <RemoteModal

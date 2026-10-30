@@ -56,6 +56,16 @@ import {
   rebuildAllClimateMeshes,
   type ClimateMeshMap,
 } from '../../babylon/ClimateMeshFactory';
+import RoomSensorList from '../../components/RoomSensorList';
+import RoomSensorForm from '../../components/RoomSensorForm';
+import {
+  createRoomSensorMesh,
+  removeRoomSensorMesh,
+  rebuildAllRoomSensorMeshes,
+  applyRoomSensorState,
+  type RoomSensorMeshMap,
+  type RoomSensorMeshEntry,
+} from '../../babylon/RoomSensorMeshFactory';
 import {
   createCameraMesh,
   removeCameraMesh,
@@ -83,8 +93,20 @@ import TubeForm, { type TubePreviewInfo } from '../../components/TubeForm';
 import { createTubeMeshes, removeTubeMeshes, disposeAllTubes, renderMockupLabels, type TubeMap } from '../../babylon/TubeMeshFactory';
 import GuidedTour from '../../components/GuidedTour/GuidedTour';
 import { editorTourSteps } from '../../components/GuidedTour/tourSteps';
-import type { LightConfig, LightGroup, DisplayConfig, ShadowWallConfig, CoverConfig, TubeConfig, StaircaseConfig, CameraConfig, ClimateConfig, FloorConfig, AppConfig, LightPosition, HAState } from '../../types';
+import type { LightConfig, LightGroup, DisplayConfig, ShadowWallConfig, CoverConfig, TubeConfig, StaircaseConfig, CameraConfig, ClimateConfig, RoomSensorConfig, FloorConfig, AppConfig, LightPosition, HAState } from '../../types';
 import './ConfigEditor.css';
+
+/** Editor labels have no live HA data: show a plausible reading so the look can be judged. */
+function applyEditorRoomMock(entry: RoomSensorMeshEntry): void {
+  const mockTemp: HAState = { entity_id: '', state: '21.0', attributes: { unit_of_measurement: '°C' } };
+  const mockHumidity: HAState = { entity_id: '', state: '50', attributes: {} };
+  applyRoomSensorState(entry, mockTemp, entry.config.humidityEntityId ? mockHumidity : undefined);
+}
+
+function rebuildEditorRooms(scene: Scene, map: RoomSensorMeshMap, list: RoomSensorConfig[]): void {
+  rebuildAllRoomSensorMeshes(scene, map, list);
+  for (const entry of Object.values(map)) applyEditorRoomMock(entry);
+}
 
 export default function ConfigEditor() {
   const navigate = useNavigate();
@@ -126,7 +148,7 @@ export default function ConfigEditor() {
   const [toastVisible, setToastVisible] = useState(false);
 
   // Editor mode: lights, displays, covers, walls, or tubes
-  const [editorMode, setEditorMode] = useState<'lights' | 'displays' | 'covers' | 'walls' | 'tubes' | 'stairs' | 'cameras' | 'climate'>('lights');
+  const [editorMode, setEditorMode] = useState<'lights' | 'displays' | 'covers' | 'walls' | 'tubes' | 'stairs' | 'cameras' | 'climate' | 'rooms'>('lights');
 
   // Full config + multi-floor editing state
   const configRef = useRef<AppConfig | null>(null);
@@ -253,6 +275,18 @@ export default function ConfigEditor() {
   const climateRotationRef = useRef(climateRotation);
   climateRotationRef.current = climateRotation;
   const climatePreviewIdRef = useRef<string | null>(null);
+
+  // Room sensors (floating temperature labels)
+  const roomMeshMapRef = useRef<RoomSensorMeshMap>({});
+  const [rooms, setRooms] = useState<RoomSensorConfig[]>([]);
+  const [roomEditIdx, setRoomEditIdx] = useState<number | null>(null);
+  const [roomPanelOpen, setRoomPanelOpen] = useState(false);
+  const roomPanelOpenRef = useRef(roomPanelOpen);
+  roomPanelOpenRef.current = roomPanelOpen;
+  const roomsRef = useRef(rooms);
+  roomsRef.current = rooms;
+  const [roomTintRadius, setRoomTintRadius] = useState(1.5);
+  const roomPreviewIdRef = useRef<string | null>(null);
 
   // Current preview shape/size from LightForm
   const previewInfoRef = useRef<PreviewInfo>({ shape: 'sphere', size: { diameter: 0.25 } });
@@ -594,6 +628,7 @@ export default function ConfigEditor() {
     Object.keys(staircaseMeshMapRef.current).forEach((id) => removeStaircaseMesh(ctx.scene, staircaseMeshMapRef.current, id));
     Object.keys(cameraMeshMapRef.current).forEach((id) => removeCameraMesh(ctx.scene, cameraMeshMapRef.current, id));
     Object.keys(climateMeshMapRef.current).forEach((id) => removeClimateMesh(ctx.scene, climateMeshMapRef.current, id));
+    Object.keys(roomMeshMapRef.current).forEach((id) => removeRoomSensorMesh(roomMeshMapRef.current, id));
     for (const m of editorModelMeshesRef.current) m.dispose();
     editorModelMeshesRef.current = [];
     editorEdgeRef.current?.dispose();
@@ -609,6 +644,7 @@ export default function ConfigEditor() {
     setStaircases(floorCfg.staircases || []); staircasesRef.current = floorCfg.staircases || [];
     setCameras(floorCfg.cameras || []); camerasRef.current = floorCfg.cameras || [];
     setClimates(floorCfg.climates || []); climatesRef.current = floorCfg.climates || [];
+    setRooms(floorCfg.roomSensors || []); roomsRef.current = floorCfg.roomSensors || [];
 
     // Load the floor's model
     const modelBlob = await getModelBlob(floorCfg.modelId);
@@ -648,6 +684,7 @@ export default function ConfigEditor() {
     rebuildAllStaircaseMeshes(ctx.scene, staircaseMeshMapRef.current, floorCfg.staircases || []);
     rebuildAllCameraMeshes(ctx.scene, cameraMeshMapRef.current, floorCfg.cameras || []);
     rebuildAllClimateMeshes(ctx.scene, climateMeshMapRef.current, floorCfg.climates || []);
+    rebuildEditorRooms(ctx.scene, roomMeshMapRef.current, floorCfg.roomSensors || []);
   }, [computeIdealRadius, showToast]);
 
   /** Switch which floor is being edited (persists nothing — edits auto-save). */
@@ -662,6 +699,7 @@ export default function ConfigEditor() {
     setPanelOpen(false); setDisplayPanelOpen(false); setCoverPanelOpen(false);
     setWallPanelOpen(false); setTubePanelOpen(false); setStaircasePanelOpen(false); setCameraPanelOpen(false);
     setClimatePanelOpen(false); setClimateEditIdx(null);
+    setRoomPanelOpen(false); setRoomEditIdx(null);
     setEditIdx(null); setDisplayEditIdx(null); setCoverEditIdx(null);
     setWallEditIdx(null); setTubeEditIdx(null); setStaircaseEditIdx(null); setCameraEditIdx(null);
     setEditFloorId(floorId);
@@ -807,8 +845,8 @@ export default function ConfigEditor() {
           };
           setPosition(newPos);
           positionRef.current = newPos;
-        } else if (wallPanelOpenRef.current || staircasePanelOpenRef.current) {
-          // Wall / staircase placing mode: exact position, no offset
+        } else if (wallPanelOpenRef.current || staircasePanelOpenRef.current || roomPanelOpenRef.current) {
+          // Wall / staircase / room placing mode: exact position, no offset
           const newPos: LightPosition = {
             x: parseFloat(p.x.toFixed(3)),
             y: parseFloat(p.y.toFixed(3)),
@@ -876,7 +914,7 @@ export default function ConfigEditor() {
         return;
       }
       // Skip click-to-edit when already editing another entity
-      if (displayPanelOpenRef.current || coverPanelOpenRef.current || wallPanelOpenRef.current || tubePanelOpenRef.current || staircasePanelOpenRef.current || cameraPanelOpenRef.current || climatePanelOpenRef.current) return;
+      if (displayPanelOpenRef.current || coverPanelOpenRef.current || wallPanelOpenRef.current || tubePanelOpenRef.current || staircasePanelOpenRef.current || cameraPanelOpenRef.current || climatePanelOpenRef.current || roomPanelOpenRef.current) return;
 
       // Pick under pointer
       const pick = ctx.scene.pick(evt.offsetX, evt.offsetY);
@@ -932,6 +970,15 @@ export default function ConfigEditor() {
         }
       }
 
+      // Click on a room label to edit it
+      if (pick.pickedMesh?.metadata?.roomSensorId) {
+        const clickedId = pick.pickedMesh.metadata.roomSensorId;
+        const idx = roomsRef.current.findIndex((r) => r.id === clickedId);
+        if (idx !== -1) {
+          handleEditRoomRef.current(idx);
+        }
+      }
+
       // Click on a climate unit to edit it
       if (pick.pickedMesh?.metadata?.climateId) {
         const clickedId = pick.pickedMesh.metadata.climateId;
@@ -964,6 +1011,9 @@ export default function ConfigEditor() {
       );
       Object.keys(climateMeshMapRef.current).forEach((id) =>
         removeClimateMesh(ctx.scene, climateMeshMapRef.current, id),
+      );
+      Object.keys(roomMeshMapRef.current).forEach((id) =>
+        removeRoomSensorMesh(roomMeshMapRef.current, id),
       );
       clearPreview();
       for (const m of wallEditorMeshesRef.current) m.dispose();
@@ -1035,7 +1085,7 @@ export default function ConfigEditor() {
 
       // Ctrl+Z undo (must check before the modifier guard)
       if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
-        if (!panelOpenRef.current && !displayPanelOpenRef.current && !coverPanelOpenRef.current && !wallPanelOpenRef.current && !tubePanelOpenRef.current && !staircasePanelOpenRef.current && !cameraPanelOpenRef.current && !climatePanelOpenRef.current) return;
+        if (!panelOpenRef.current && !displayPanelOpenRef.current && !coverPanelOpenRef.current && !wallPanelOpenRef.current && !tubePanelOpenRef.current && !staircasePanelOpenRef.current && !cameraPanelOpenRef.current && !climatePanelOpenRef.current && !roomPanelOpenRef.current) return;
         const stack = posUndoStackRef.current;
         if (stack.length === 0) return;
         e.preventDefault();
@@ -1147,6 +1197,11 @@ export default function ConfigEditor() {
         if (climatePanelOpenRef.current) {
           e.preventDefault();
           handleCloseClimatePanelRef.current();
+          return;
+        }
+        if (roomPanelOpenRef.current) {
+          e.preventDefault();
+          handleCloseRoomPanelRef.current();
           return;
         }
       }
@@ -2429,6 +2484,187 @@ export default function ConfigEditor() {
     rebuildClimatePreview();
   }, [position, climateRotation, climatePanelOpen, rebuildClimatePreview]);
 
+  // --- Room sensor handlers ---
+
+  const handleAddRoom = useCallback(() => {
+    setRoomEditIdx(null);
+    setPosition({ x: 0, y: 0, z: 0 });
+    setRoomTintRadius(1.5);
+    posUndoStackRef.current = [];
+    setRoomPanelOpen(true);
+  }, []);
+
+  const handleEditRoom = useCallback(
+    (idx: number) => {
+      const cfg = rooms[idx];
+      setRoomEditIdx(idx);
+      setPosition(cfg.position);
+      setRoomTintRadius(cfg.tintRadius ?? 1.5);
+      posUndoStackRef.current = [];
+      setRoomPanelOpen(true);
+    },
+    [rooms],
+  );
+  const handleEditRoomRef = useRef(handleEditRoom);
+  handleEditRoomRef.current = handleEditRoom;
+
+  const handleDeleteRoom = useCallback(
+    (idx: number) => {
+      removeRoomSensorMesh(roomMeshMapRef.current, rooms[idx].id);
+      const updated = rooms.filter((_, i) => i !== idx);
+      setRooms(updated);
+      roomsRef.current = updated;
+      persistActiveFloor({ roomSensors: updated });
+      showToast('Room sensor deleted');
+    },
+    [rooms, persistActiveFloor, showToast],
+  );
+
+  const handleDuplicateRoom = useCallback(
+    (idx: number) => {
+      const scene = sceneCtxRef.current?.scene;
+      if (!scene) return;
+      const src = rooms[idx];
+      const copy: RoomSensorConfig = {
+        ...src,
+        id: generateUUID(),
+        label: src.label + ' (copy)',
+        position: { ...src.position, x: parseFloat((src.position.x + 1).toFixed(3)) },
+      };
+      const updated = [...rooms, copy];
+      setRooms(updated);
+      roomsRef.current = updated;
+      rebuildEditorRooms(scene, roomMeshMapRef.current, updated);
+      persistActiveFloor({ roomSensors: updated });
+      showToast('Room sensor duplicated');
+    },
+    [rooms, persistActiveFloor, showToast],
+  );
+
+  const handleCloseRoomPanel = useCallback(() => {
+    const scene = sceneCtxRef.current?.scene;
+    if (roomPreviewIdRef.current) {
+      removeRoomSensorMesh(roomMeshMapRef.current, roomPreviewIdRef.current);
+      roomPreviewIdRef.current = null;
+    }
+    if (scene && roomEditIdx !== null) {
+      const cfg = roomsRef.current[roomEditIdx];
+      if (cfg) {
+        roomMeshMapRef.current[cfg.id] = createRoomSensorMesh(scene, cfg);
+        applyEditorRoomMock(roomMeshMapRef.current[cfg.id]);
+      }
+    }
+    setRoomPanelOpen(false);
+    clearPreview();
+    exitPlacingMode();
+    setRoomEditIdx(null);
+  }, [clearPreview, exitPlacingMode, roomEditIdx]);
+  const handleCloseRoomPanelRef = useRef(handleCloseRoomPanel);
+  handleCloseRoomPanelRef.current = handleCloseRoomPanel;
+
+  // Live preview label + move gizmo on its root node
+  const rebuildRoomPreview = useCallback(() => {
+    const scene = sceneCtxRef.current?.scene;
+    if (!scene) return;
+
+    const editingCfg = roomsRef.current[roomEditIdx ?? -1];
+    const previewId = editingCfg?.id || '__room_preview__';
+    const oldPreviewId = roomPreviewIdRef.current;
+    if (oldPreviewId) {
+      removeRoomSensorMesh(roomMeshMapRef.current, oldPreviewId);
+    } else if (previewId !== '__room_preview__') {
+      removeRoomSensorMesh(roomMeshMapRef.current, previewId);
+    }
+    roomPreviewIdRef.current = previewId;
+
+    const tempCfg: RoomSensorConfig = {
+      id: previewId,
+      label: editingCfg?.label || 'Room',
+      temperatureEntityId: '',
+      humidityEntityId: editingCfg?.humidityEntityId,
+      position: positionRef.current,
+      tintRadius: roomTintRadius,
+    };
+    const entry = createRoomSensorMesh(scene, tempCfg);
+    applyEditorRoomMock(entry);
+    entry.label.metadata = { previewTarget: 'room' };
+    roomMeshMapRef.current[previewId] = entry;
+
+    if (gizmoRef.current) {
+      gizmoRef.current.dispose();
+      gizmoRef.current = null;
+    }
+    if (!utilLayerRef.current) {
+      utilLayerRef.current = new UtilityLayerRenderer(scene);
+    }
+    const gizmo = new PositionGizmo(utilLayerRef.current);
+    gizmo.scaleRatio = 1.2;
+    gizmo.updateGizmoRotationToMatchAttachedMesh = false;
+    gizmo.attachedNode = entry.root;
+
+    const onDragStart = () => {
+      draggingGizmoRef.current = true;
+      posUndoStackRef.current.push({ ...positionRef.current });
+    };
+    const onDrag = () => {
+      const p = entry.root.position;
+      const newPos: LightPosition = {
+        x: parseFloat(p.x.toFixed(3)),
+        y: parseFloat(p.y.toFixed(3)),
+        z: parseFloat(p.z.toFixed(3)),
+      };
+      positionRef.current = newPos;
+      setPosition(newPos);
+    };
+    const onDragEnd = () => {
+      draggingGizmoRef.current = false;
+      document.dispatchEvent(new Event('tour:gizmo-used'));
+      setPosition({ ...positionRef.current });
+    };
+    for (const ax of [gizmo.xGizmo, gizmo.yGizmo, gizmo.zGizmo]) {
+      ax.dragBehavior.onDragStartObservable.add(onDragStart);
+      ax.dragBehavior.onDragObservable.add(onDrag);
+      ax.dragBehavior.onDragEndObservable.add(onDragEnd);
+    }
+    for (const m of utilLayerRef.current.utilityLayerScene.meshes) {
+      if (m.material) {
+        (m.material as StandardMaterial).alpha = 0.5;
+      }
+    }
+    gizmoRef.current = gizmo;
+  }, [roomEditIdx, roomTintRadius]);
+
+  const handleSaveRoom = useCallback(
+    (cfg: RoomSensorConfig) => {
+      const scene = sceneCtxRef.current?.scene;
+      if (!scene) return;
+      if (roomPreviewIdRef.current) {
+        removeRoomSensorMesh(roomMeshMapRef.current, roomPreviewIdRef.current);
+        roomPreviewIdRef.current = null;
+      }
+      const updated = roomEditIdx !== null
+        ? rooms.map((r, i) => (i === roomEditIdx ? cfg : r))
+        : [...rooms, cfg];
+      setRooms(updated);
+      roomsRef.current = updated;
+      clearPreview();
+      rebuildEditorRooms(scene, roomMeshMapRef.current, updated);
+      setRoomPanelOpen(false);
+      exitPlacingMode();
+      setRoomEditIdx(null);
+      persistActiveFloor({ roomSensors: updated });
+      showToast('Room sensor saved');
+    },
+    [rooms, roomEditIdx, clearPreview, exitPlacingMode, persistActiveFloor, showToast],
+  );
+
+  // Rebuild room preview when position or glow radius changes (skip during gizmo drag)
+  useEffect(() => {
+    if (!roomPanelOpen) return;
+    if (draggingGizmoRef.current) return;
+    rebuildRoomPreview();
+  }, [position, roomPanelOpen, rebuildRoomPreview]);
+
   // --- Floor management handlers ---
 
   const handleAddFloor = useCallback((kind: 'floor' | 'overview' = 'floor') => {
@@ -2904,12 +3140,12 @@ export default function ConfigEditor() {
   const handleSaveConfig = useCallback(async () => {
     try {
       // The current editor arrays belong to the active floor.
-      persistActiveFloor({ lights, lightGroups, displays, covers, shadowWalls, tubes, staircases, cameras, climates });
+      persistActiveFloor({ lights, lightGroups, displays, covers, shadowWalls, tubes, staircases, cameras, climates, roomSensors: rooms });
       showToast(`Saved floor "${floors.find((f) => f.id === editFloorId)?.name ?? ''}" (${lights.length} lights, ${covers.length} covers, ${cameras.length} cams)`);
     } catch (e) {
       alert('Failed to save config: ' + (e instanceof Error ? e.message : e));
     }
-  }, [lights, lightGroups, displays, covers, shadowWalls, tubes, staircases, cameras, climates, floors, editFloorId, persistActiveFloor, showToast]);
+  }, [lights, lightGroups, displays, covers, shadowWalls, tubes, staircases, cameras, climates, rooms, floors, editFloorId, persistActiveFloor, showToast]);
 
   // Reload config from storage and rebuild the current floor
   const handleLoadConfig = useCallback(async () => {
@@ -3037,6 +3273,13 @@ export default function ConfigEditor() {
           >
             Climate ({climates.length})
           </button>
+          <button
+            className={`editor-tab${editorMode === 'rooms' ? ' active' : ''}`}
+            data-tab="rooms"
+            onClick={() => setEditorMode('rooms')}
+          >
+            Rooms ({rooms.length})
+          </button>
         </div>
 
         <div className="light-list">
@@ -3103,13 +3346,21 @@ export default function ConfigEditor() {
               onDelete={handleDeleteCamera}
               onDuplicate={handleDuplicateCamera}
             />
-          ) : (
+          ) : editorMode === 'climate' ? (
             <ClimateList
               climates={climates}
               selectedIdx={climateEditIdx}
               onSelect={handleEditClimate}
               onDelete={handleDeleteClimate}
               onDuplicate={handleDuplicateClimate}
+            />
+          ) : (
+            <RoomSensorList
+              rooms={rooms}
+              selectedIdx={roomEditIdx}
+              onSelect={handleEditRoom}
+              onDelete={handleDeleteRoom}
+              onDuplicate={handleDuplicateRoom}
             />
           )}
         </div>
@@ -3148,9 +3399,13 @@ export default function ConfigEditor() {
             <button className="btn btn-primary editor-add-btn" onClick={handleAddCamera}>
               + Add Camera
             </button>
-          ) : (
+          ) : editorMode === 'climate' ? (
             <button className="btn btn-primary editor-add-btn" onClick={handleAddClimate}>
               + Add Climate
+            </button>
+          ) : (
+            <button className="btn btn-primary editor-add-btn" onClick={handleAddRoom}>
+              + Add Room
             </button>
           )}
           <button className="btn btn-ghost" onClick={handleLoadConfig}>
@@ -3166,7 +3421,7 @@ export default function ConfigEditor() {
       <div className="canvas-area editor-canvas">
         <canvas ref={canvasRef} />
         <div className={`mode-banner${placingMode ? ' visible' : ''}`}>
-          {displayPanelOpen ? 'Click on a wall surface to place display' : coverPanelOpen ? 'Click the center of a window to place the shutter' : wallPanelOpen ? 'Click on the model to place wall' : staircasePanelOpen ? 'Click an open spot on the floor to place the staircase' : cameraPanelOpen ? 'Click a ceiling spot to mount the camera' : climatePanelOpen ? 'Click a wall to mount the climate unit' : 'Click on the model to place light'}
+          {displayPanelOpen ? 'Click on a wall surface to place display' : coverPanelOpen ? 'Click the center of a window to place the shutter' : wallPanelOpen ? 'Click on the model to place wall' : staircasePanelOpen ? 'Click an open spot on the floor to place the staircase' : cameraPanelOpen ? 'Click a ceiling spot to mount the camera' : climatePanelOpen ? 'Click a wall to mount the climate unit' : roomPanelOpen ? 'Click the middle of the room floor' : 'Click on the model to place light'}
         </div>
         <div className="coord-readout">{coordText}</div>
         <div className={`toast${toastVisible ? ' show' : ''}`}>{toastMsg}</div>
@@ -3278,6 +3533,22 @@ export default function ConfigEditor() {
           onRotationChange={setClimateRotation}
           onSave={handleSaveClimate}
           onClose={handleCloseClimatePanel}
+          onEnterPlacingMode={enterPlacingMode}
+          onExitPlacingMode={exitPlacingMode}
+          placingMode={placingMode}
+          haEntities={haEntities}
+        />
+
+        <RoomSensorForm
+          open={roomPanelOpen}
+          editRoom={roomEditIdx !== null ? rooms[roomEditIdx] : null}
+          position={position}
+          tintRadius={roomTintRadius}
+          onTintRadiusChange={setRoomTintRadius}
+          climates={climates}
+          onPositionChange={handlePositionChange}
+          onSave={handleSaveRoom}
+          onClose={handleCloseRoomPanel}
           onEnterPlacingMode={enterPlacingMode}
           onExitPlacingMode={exitPlacingMode}
           placingMode={placingMode}

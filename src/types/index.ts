@@ -109,6 +109,24 @@ export interface ClimateConfig {
   rotationY?: number;
 }
 
+// --- Room sensors (floating temperature labels) ---
+
+export interface RoomSensorConfig {
+  id: string;
+  /** Room name shown on the label (e.g. "Living room"). */
+  label: string;
+  /** HA temperature sensor (e.g. sensor.living_room_temperature). */
+  temperatureEntityId: string;
+  /** Optional HA humidity sensor, shown under the temperature. */
+  humidityEntityId?: string;
+  /** Floor point at the room center (world coordinates); the label floats above it. */
+  position: LightPosition;
+  /** Radius (m) of the soft temperature-colored glow on the floor. 0 disables it. Default 1.5. */
+  tintRadius?: number;
+  /** Optional climate config id in the same room — the modal links to its controls. */
+  climateId?: string;
+}
+
 // --- Shadow Walls (invisible roof / sun blockers) ---
 
 export interface ShadowWallConfig {
@@ -235,6 +253,7 @@ export interface FloorConfig {
   staircases?: StaircaseConfig[];
   cameras?: CameraConfig[];
   climates?: ClimateConfig[];
+  roomSensors?: RoomSensorConfig[];
 }
 
 export interface AppConfig {

@@ -113,6 +113,11 @@ const SENSOR_FLUCTUATION: Record<
   "sensor.download_speed": { base: 45, range: 30, decimals: 1 },
   "sensor.upload_speed": { base: 13, range: 8, decimals: 1 },
   "sensor.water_flow": { base: 3.4, range: 2, decimals: 1 },
+  "sensor.living_room_temperature": { base: 24.4, range: 0.2, decimals: 1 },
+  "sensor.living_room_humidity": { base: 47, range: 1 },
+  "sensor.bedroom_temperature": { base: 18.6, range: 0.2, decimals: 1 },
+  "sensor.bedroom_humidity": { base: 56, range: 1 },
+  "sensor.garden_temperature": { base: 13.6, range: 0.3, decimals: 1 },
 };
 
 /**
@@ -196,6 +201,11 @@ export class DemoHAConnection {
       "sensor.download_speed": { state: "45.2", attributes: {} },
       "sensor.upload_speed": { state: "12.8", attributes: {} },
       "sensor.water_flow": { state: "3.4", attributes: {} },
+      "sensor.living_room_temperature": { state: "24.4", attributes: { unit_of_measurement: "°C", device_class: "temperature" } },
+      "sensor.living_room_humidity": { state: "47", attributes: { unit_of_measurement: "%", device_class: "humidity" } },
+      "sensor.bedroom_temperature": { state: "18.6", attributes: { unit_of_measurement: "°C", device_class: "temperature" } },
+      "sensor.bedroom_humidity": { state: "56", attributes: { unit_of_measurement: "%", device_class: "humidity" } },
+      "sensor.garden_temperature": { state: "13.6", attributes: { unit_of_measurement: "°C", device_class: "temperature" } },
       "climate.thermostat": {
         state: "heat",
         attributes: {
@@ -430,9 +440,41 @@ export class DemoHAConnection {
     this.callbacks.onStateChanged?.(entityId, newState);
   }
 
-  async request(_msg: Record<string, unknown>): Promise<unknown> {
-    // Demo mode doesn't support arbitrary WS requests (e.g. history)
+  async request(msg: Record<string, unknown>): Promise<unknown> {
+    if (msg.type === "history/history_during_period") return this.demoHistory(msg);
+    // Other arbitrary WS requests aren't simulated
     return {};
+  }
+
+  /**
+   * Synthetic minimal_response history: a daily sine around each entity's
+   * current value (wider swing for humidity) so graphs line up with the label.
+   */
+  private demoHistory(msg: Record<string, unknown>): Record<string, Array<{ s: string; lu: number }>> {
+    const ids = Array.isArray(msg.entity_ids) ? msg.entity_ids.filter((i): i is string => typeof i === "string") : [];
+    const end = Date.parse(String(msg.end_time)) || Date.now();
+    const start = Date.parse(String(msg.start_time)) || end - 24 * 3600_000;
+    const count = 144;
+    const result: Record<string, Array<{ s: string; lu: number }>> = {};
+    for (const id of ids) {
+      const current = parseFloat(this.states.get(id)?.state ?? "");
+      const center = Number.isFinite(current) ? current : 21;
+      const humid = id.includes("humid");
+      const amp = humid ? 4 : 1.5;
+      const points: Array<{ s: string; lu: number }> = [];
+      for (let i = 0; i <= count; i++) {
+        const t = start + ((end - start) * i) / count;
+        const hours = t / 3600_000;
+        // Peak mid-afternoon for temperature, early morning for humidity
+        const phase = humid ? 4 : 15;
+        const wave = Math.cos((2 * Math.PI * (hours - phase)) / 24);
+        // Anchor the last sample on the live value
+        const value = center + amp * (wave - Math.cos((2 * Math.PI * (end / 3600_000 - phase)) / 24));
+        points.push({ s: value.toFixed(1), lu: t / 1000 });
+      }
+      result[id] = points;
+    }
+    return result;
   }
 
   get isConnected(): boolean {
