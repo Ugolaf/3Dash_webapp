@@ -11,6 +11,9 @@ interface Props {
   /** Glow radius is owned by the editor so the live preview follows the slider. */
   tintRadius: number;
   onTintRadiusChange: (radius: number) => void;
+  /** Label size multiplier, owned by the editor for the same reason. */
+  labelScale: number;
+  onLabelScaleChange: (scale: number) => void;
   /** Climate units on the same floor, offered as an optional link. */
   climates: ClimateConfig[];
   onPositionChange: (pos: LightPosition) => void;
@@ -35,6 +38,8 @@ export default function RoomSensorForm({
   position,
   tintRadius,
   onTintRadiusChange,
+  labelScale,
+  onLabelScaleChange,
   climates,
   onPositionChange,
   onSave,
@@ -81,9 +86,10 @@ export default function RoomSensorForm({
       ...(humId ? { humidityEntityId: humId } : {}),
       position,
       tintRadius,
+      labelScale,
       ...(climateId ? { climateId } : {}),
     });
-  }, [editRoom, label, temperatureEntityId, humidityEntityId, position, tintRadius, climateId, onSave]);
+  }, [editRoom, label, temperatureEntityId, humidityEntityId, position, tintRadius, labelScale, climateId, onSave]);
 
   const footer = (
     <>
@@ -158,6 +164,27 @@ export default function RoomSensorForm({
         <div className={`placement-hint${open ? ' visible' : ''}`}>
           Click the middle of the room's floor — the label floats above it and
           a soft glow tinted by the temperature spreads on the floor.
+        </div>
+        <div className="pos-grid">
+          <span className="pos-axis" style={{ color: 'var(--muted)' }}>Size</span>
+          <input
+            type="range"
+            className="pos-slider"
+            min={0.1}
+            max={2}
+            step={0.05}
+            value={labelScale}
+            onChange={(e) => onLabelScaleChange(parseFloat(e.target.value))}
+          />
+          <input
+            type="number"
+            className="pos-num"
+            min={0.1}
+            max={2}
+            step={0.05}
+            value={labelScale}
+            onChange={(e) => onLabelScaleChange(Math.min(2, Math.max(0.1, parseFloat(e.target.value) || 1)))}
+          />
         </div>
         <div className="pos-grid">
           <span className="pos-axis" style={{ color: 'var(--muted)' }}>Glow</span>

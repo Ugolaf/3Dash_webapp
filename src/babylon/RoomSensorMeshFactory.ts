@@ -198,11 +198,12 @@ export function createRoomSensorMesh(scene: Scene, cfg: RoomSensorConfig): RoomS
     tint.isPickable = false;
   }
 
+  const sizeFactor = cfg.labelScale ?? 1;
   const scaleObserver = scene.onBeforeRenderObservable.add(() => {
     const cam = scene.activeCamera;
     if (!cam) return;
     const dist = Vector3.Distance(cam.globalPosition, label.getAbsolutePivotPoint());
-    const k = Math.min(MAX_LABEL_SCALE, Math.max(1, dist / SCALE_REF_DISTANCE));
+    const k = sizeFactor * Math.min(MAX_LABEL_SCALE, Math.max(1, dist / SCALE_REF_DISTANCE));
     if (Math.abs(label.scaling.x - k) < 0.01) return;
     label.scaling.setAll(k);
     // Grow upward from the stem's tip so a big label never sinks into the floor

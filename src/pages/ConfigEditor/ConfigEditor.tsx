@@ -286,6 +286,7 @@ export default function ConfigEditor() {
   const roomsRef = useRef(rooms);
   roomsRef.current = rooms;
   const [roomTintRadius, setRoomTintRadius] = useState(1.5);
+  const [roomLabelScale, setRoomLabelScale] = useState(1);
   const roomPreviewIdRef = useRef<string | null>(null);
 
   // Current preview shape/size from LightForm
@@ -2490,6 +2491,7 @@ export default function ConfigEditor() {
     setRoomEditIdx(null);
     setPosition({ x: 0, y: 0, z: 0 });
     setRoomTintRadius(1.5);
+    setRoomLabelScale(1);
     posUndoStackRef.current = [];
     setRoomPanelOpen(true);
   }, []);
@@ -2500,6 +2502,7 @@ export default function ConfigEditor() {
       setRoomEditIdx(idx);
       setPosition(cfg.position);
       setRoomTintRadius(cfg.tintRadius ?? 1.5);
+      setRoomLabelScale(cfg.labelScale ?? 1);
       posUndoStackRef.current = [];
       setRoomPanelOpen(true);
     },
@@ -2584,6 +2587,7 @@ export default function ConfigEditor() {
       humidityEntityId: editingCfg?.humidityEntityId,
       position: positionRef.current,
       tintRadius: roomTintRadius,
+      labelScale: roomLabelScale,
     };
     const entry = createRoomSensorMesh(scene, tempCfg);
     applyEditorRoomMock(entry);
@@ -2632,7 +2636,7 @@ export default function ConfigEditor() {
       }
     }
     gizmoRef.current = gizmo;
-  }, [roomEditIdx, roomTintRadius]);
+  }, [roomEditIdx, roomTintRadius, roomLabelScale]);
 
   const handleSaveRoom = useCallback(
     (cfg: RoomSensorConfig) => {
@@ -3545,6 +3549,8 @@ export default function ConfigEditor() {
           position={position}
           tintRadius={roomTintRadius}
           onTintRadiusChange={setRoomTintRadius}
+          labelScale={roomLabelScale}
+          onLabelScaleChange={setRoomLabelScale}
           climates={climates}
           onPositionChange={handlePositionChange}
           onSave={handleSaveRoom}

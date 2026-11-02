@@ -123,6 +123,8 @@ export interface RoomSensorConfig {
   position: LightPosition;
   /** Radius (m) of the soft temperature-colored glow on the floor. 0 disables it. Default 1.5. */
   tintRadius?: number;
+  /** Label size multiplier (0.1–2). Default 1; distance auto-scaling still applies on top. */
+  labelScale?: number;
   /** Optional climate config id in the same room — the modal links to its controls. */
   climateId?: string;
 }
