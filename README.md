@@ -10,7 +10,7 @@ A 3D floorplan dashboard for [Home Assistant](https://www.home-assistant.io/). L
 - **Multiple floors** -- one model per floor, linked by clickable staircases
 - **Exterior overview** -- a 3/4 aerial view of the whole house (roof, garden) to control outdoor shutters and lights; a top bar jumps to any floor
 - **Climate** -- wall-mounted split AC units; click one to set its mode, target temperature, fan speed and swing; while running it blows animated warm (heat) or cold (cool) air
-- **Room temperature** -- a floating label per room bound to an HA temperature sensor (optional humidity), colored from cold blue to hot red with a matching glow on the floor; click it for the history graph and a shortcut to the room's climate unit
+- **Room temperature** -- a floating label per room bound to an HA temperature sensor (optional humidity), colored from cold blue to hot red with a matching glow on the floor; click it for the history graph and a shortcut to the room's climate unit. Label size (0.1–2×) and glow radius are adjustable per room in the editor
 - **Cameras** -- place dome cameras in the scene and open their live Home Assistant feed
 - **Alarm mode** -- the whole scene blinks red while a chosen Home Assistant alarm entity is triggered
 - **Wall displays** -- render live sensor data (temperature, humidity, energy, etc.) on surfaces inside the model
