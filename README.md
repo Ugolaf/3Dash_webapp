@@ -17,7 +17,7 @@ A 3D floorplan dashboard for [Home Assistant](https://www.home-assistant.io/). L
 - **Network tubes** -- animated tubes that visualize real-time network throughput
 - **Sun and weather** -- sun position tracks your real location; optional rain/snow particle effects
 - **Side panel** -- configurable cards for scripts, indicators, and graphs
-- **Config editor** -- define floors, lights, shutters, displays, cameras, climate units, room sensors, staircases, shadow walls, and tubes from a built-in UI
+- **Config editor** -- define floors, lights, shutters, displays, cameras, climate units, room sensors, staircases, shadow walls, and tubes from a built-in UI; the item form slides over the sidebar so the 3D view stays clear, and wall-mounted items (shutters, climate units) can be rotated or flipped by hand when a wall click picks the wrong side
 - **Onboarding wizard** -- guided setup for first-time users
 - **Backup / restore** -- export and import your full configuration as a ZIP
 - **Demo mode** -- explore the dashboard without a Home Assistant instance

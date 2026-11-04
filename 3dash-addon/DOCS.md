@@ -36,6 +36,8 @@ All configuration happens in the browser -- no files to edit manually.
 
 Each floor has its own `.glb` model. In the config editor, the floor bar adds (**+**), uploads a model for (**⬆**), renames (**✎**) or deletes (**×**) a floor. The **⌂** button adds an exterior overview: a model of the whole house, roof and garden on which you place outdoor shutters and lights. On the dashboard, the bar at the top switches between the overview and each floor.
 
+While adding or editing an item, its form slides over the editor sidebar so the whole 3D view stays clickable. Shutters and climate units snap to the wall you click; if they face the wrong way, use the **Rot** slider or **Flip side** in the form.
+
 To drive several lamps from one click, enable **Multi-part** in the light form and add a part per lamp, then size the hitbox to cover them. Separate Home Assistant entities must first be grouped with a *light group* helper.
 
 ## SSL / HTTPS
