@@ -3,6 +3,8 @@ import type { CoverConfig, LightPosition } from '../types';
 import EntityPicker, { type HAEntityOption } from './EntityPicker';
 import { FormPanel, AccordionSection } from './FormPanel';
 
+const DEG = 180 / Math.PI;
+
 export interface CoverPreviewInfo {
   width: number;
   height: number;
@@ -14,6 +16,8 @@ interface Props {
   position: LightPosition;
   normal: LightPosition;
   onPositionChange: (pos: LightPosition) => void;
+  /** Manual facing override for windows whose wall click picks a wrong/odd normal. */
+  onNormalChange: (normal: LightPosition) => void;
   onSave: (cfg: CoverConfig) => void;
   onClose: () => void;
   onEnterPlacingMode: () => void;
@@ -29,6 +33,7 @@ export default function CoverForm({
   position,
   normal,
   onPositionChange,
+  onNormalChange,
   onSave,
   onClose,
   onEnterPlacingMode,
@@ -75,6 +80,20 @@ export default function CoverForm({
       onPositionChange({ ...position, [axis]: parseFloat(value.toFixed(3)) });
     },
     [position, onPositionChange],
+  );
+
+  // Facing as a horizontal yaw (0–360°) so the shutter can be turned without a wall hit
+  const yawDeg = ((Math.round(Math.atan2(normal.x, normal.z) * DEG) % 360) + 360) % 360;
+  const setYawDeg = useCallback(
+    (deg: number) => {
+      const rad = deg / DEG;
+      onNormalChange({
+        x: parseFloat(Math.sin(rad).toFixed(4)),
+        y: 0,
+        z: parseFloat(Math.cos(rad).toFixed(4)),
+      });
+    },
+    [onNormalChange],
   );
 
   const handleSave = useCallback(() => {
@@ -171,7 +190,8 @@ export default function CoverForm({
 
       <AccordionSection title="Position" defaultOpen>
         <div className={`placement-hint${open ? ' visible' : ''}`}>
-          Click the center of a window on an exterior wall,<br />then fine-tune below.
+          Click the center of a window on an exterior wall, then fine-tune below.
+          If the shutter faces the wrong way, use Rot or Flip side.
         </div>
 
         {([
@@ -200,12 +220,28 @@ export default function CoverForm({
           </div>
         ))}
 
-        <div style={{ marginTop: 8 }}>
-          <span className="field-label">Wall Normal (outward)</span>
-          <div style={{ fontSize: 11, opacity: 0.6, fontFamily: 'var(--font-mono, monospace)', marginTop: 4 }}>
-            nx: {normal.x.toFixed(3)} &nbsp; ny: {normal.y.toFixed(3)} &nbsp; nz: {normal.z.toFixed(3)}
-          </div>
+        <div className="pos-grid">
+          <span className="pos-axis" style={{ color: 'var(--muted)' }}>Rot</span>
+          <input
+            type="range"
+            className="pos-slider"
+            min={0}
+            max={359}
+            step={1}
+            value={yawDeg}
+            onChange={(e) => setYawDeg(parseInt(e.target.value))}
+          />
+          <input
+            type="number"
+            className="pos-num"
+            step={1}
+            value={yawDeg}
+            onChange={(e) => setYawDeg(parseInt(e.target.value) || 0)}
+          />
         </div>
+        <button type="button" className="btn btn-ghost" onClick={() => setYawDeg(yawDeg + 180)}>
+          &#8634; Flip side
+        </button>
       </AccordionSection>
     </FormPanel>
   );

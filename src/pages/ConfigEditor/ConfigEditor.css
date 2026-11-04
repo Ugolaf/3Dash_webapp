@@ -1,4 +1,5 @@
 .config-editor {
+  --editor-sidebar-width: 600px;
   display: flex;
   height: 100vh;
   overflow: hidden;
@@ -6,7 +7,7 @@
 
 /* Sidebar */
 .editor-sidebar {
-  width: 600px;
+  width: var(--editor-sidebar-width);
   flex-shrink: 0;
   background-color: var(--side-panel-bg);
   background-image: var(--panel-dots);

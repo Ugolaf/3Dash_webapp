@@ -134,19 +134,22 @@ export default function ClimateForm({
             type="range"
             className="pos-slider"
             min={0}
-            max={360}
-            step={5}
+            max={359}
+            step={1}
             value={rotDeg}
             onChange={(e) => onRotationChange(parseInt(e.target.value) / DEG)}
           />
           <input
             type="number"
             className="pos-num"
-            step={5}
+            step={1}
             value={rotDeg}
             onChange={(e) => onRotationChange((parseInt(e.target.value) || 0) / DEG)}
           />
         </div>
+        <button type="button" className="btn btn-ghost" onClick={() => onRotationChange(rotationY + Math.PI)}>
+          &#8634; Flip side
+        </button>
       </AccordionSection>
 
       <AccordionSection title="Position" defaultOpen>

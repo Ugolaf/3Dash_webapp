@@ -3466,6 +3466,7 @@ export default function ConfigEditor() {
           position={position}
           normal={coverNormal}
           onPositionChange={handlePositionChange}
+          onNormalChange={setCoverNormal}
           onSave={handleSaveCover}
           onClose={handleCloseCoverPanel}
           onEnterPlacingMode={enterPlacingMode}

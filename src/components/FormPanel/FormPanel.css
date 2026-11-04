@@ -1,13 +1,15 @@
-/* Form panel — opaque right drawer */
+/* Form panel — opaque drawer sliding over the editor sidebar, so the 3D view
+   stays fully clickable while placing an element */
 .form-panel {
-  position: absolute;
-  top: 0; right: 0; bottom: 0;
-  width: 450px;
+  position: fixed;
+  top: 0; left: 0; bottom: 0;
+  width: var(--editor-sidebar-width, 450px);
+  max-width: 100vw;
   background-color: var(--surface);
-  border-left: var(--panel-border-width) solid var(--panel-border);
+  border-right: var(--panel-border-width) solid var(--panel-border);
   display: flex;
   flex-direction: column;
-  transform: translateX(100%);
+  transform: translateX(-100%);
   transition: transform 0.25s ease;
   z-index: 10;
 }
